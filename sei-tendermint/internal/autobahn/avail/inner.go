@@ -144,14 +144,12 @@ func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) 
 	}
 
 	// Restore persisted blocks for re-attached lanes. Gaps / bad parent / over-cap → error.
+	// No head-gap skip: WAL must start at q.next. No-anchor mid-WAL is unsupported
+	// (rare; first AppQC forms quickly). Tip-stale leave WALs are tipcut-skipped above.
 	for lane, bs := range l.blocks {
 		q, ok := i.blocks[lane]
 		if !ok || len(bs) == 0 {
 			continue
-		}
-		// Unnamed-by-tipEpoch tips start at First=0; advance to WAL start before load.
-		if bs[0].Number > q.next {
-			q.prune(bs[0].Number)
 		}
 		var lastHash types.BlockHeaderHash
 		for j, b := range bs {
