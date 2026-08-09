@@ -231,7 +231,12 @@ func (env *testEnv) Run(ctx context.Context) error {
 }
 
 func newTestEnv(rng utils.Rng, cfg *Config, app *proxy.Proxy) *testEnv {
-	registry, keys := epoch.GenRegistry(rng, 1)
+	env, _, _ := newTestEnvN(rng, 1, cfg, app)
+	return env
+}
+
+func newTestEnvN(rng utils.Rng, n int, cfg *Config, app *proxy.Proxy) (*testEnv, *epoch.Registry, []types.SecretKey) {
+	registry, keys := epoch.GenRegistry(rng, n)
 	dataState := utils.OrPanic1(data.NewState(&data.Config{Registry: registry}, memblock.NewBlockDB()))
 	consensusState := utils.OrPanic1(consensus.NewState(&consensus.Config{
 		Key:                keys[0],
@@ -246,7 +251,7 @@ func newTestEnv(rng utils.Rng, cfg *Config, app *proxy.Proxy) *testEnv {
 		inner: utils.NewMutex(&testEnvInner{
 			sequenced: map[common.Address][]*txSpec{},
 		}),
-	}
+	}, registry, keys
 }
 
 func TestInsertTx_TooLargeTx(t *testing.T) {
@@ -483,4 +488,91 @@ func TestMempool_EvmTxByHash(t *testing.T) {
 		require.False(t, ok)
 	}
 	require.Equal(t, nonce+uint64(len(txs)), app.EvmNonce(addr))
+}
+
+func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
+	ctx := t.Context()
+	rng := utils.TestRng()
+	app := newTestApp()
+	cfg := app.Cfg()
+	cfg.AllowEmptyBlocks = true
+	cfg.BlockInterval = 10 * time.Millisecond
+	env, registry, keys := newTestEnvN(rng, 2, cfg, app.Proxy())
+	a, b := keys[0], keys[1]
+	availState := env.consensus.Avail()
+
+	lane0 := types.NewLaneID(a.Public(), 0)
+	require.Equal(t, lane0, availState.LocalLane().OrPanic("genesis"))
+
+	if err := scope.Run(ctx, func(ctx context.Context, s scope.Scope) error {
+		s.SpawnBgNamed("avail", func() error {
+			return utils.IgnoreCancel(availState.Run(ctx))
+		})
+		s.SpawnBgNamed("producer", func() error {
+			return utils.IgnoreCancel(env.state.Run(ctx))
+		})
+
+		if _, err := availState.Block(ctx, lane0, 0); err != nil {
+			return err
+		}
+
+		addr := common.Address{1}
+		stuck := env.genTx(rng, addr, app.EvmNonce(addr))
+		if _, err := env.state.InsertTx(ctx, stuck.encode()); err != nil {
+			return err
+		}
+
+		epLeave, err := registry.ActivateEpoch(
+			map[types.PublicKey]uint64{b.Public(): 1},
+			types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
+		)
+		if err != nil {
+			return err
+		}
+		availState.ApplyEpoch(epLeave)
+		if _, err := availState.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
+			return !opt.IsPresent()
+		}); err != nil {
+			return err
+		}
+
+		if _, err := env.state.TryInsertTx(ctx, env.genTx(rng, addr, app.EvmNonce(addr)).encode()); !errors.Is(err, ErrNotProducing) {
+			return fmt.Errorf("TryInsertTx after leave: got %v, want ErrNotProducing", err)
+		}
+		for m, ctrl := range env.state.mempool.Lock() {
+			if err := ctrl.WaitUntil(ctx, func() bool { return !m.lane.IsPresent() }); err != nil {
+				return err
+			}
+			if len(m.blocks) != 0 || len(m.nextBlock.txs) != 0 || len(m.evmTxs) != 0 {
+				return fmt.Errorf("mempool not cleared on leave")
+			}
+		}
+
+		epJoin, err := registry.ActivateEpoch(
+			map[types.PublicKey]uint64{a.Public(): 1, b.Public(): 1},
+			types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
+		)
+		if err != nil {
+			return err
+		}
+		availState.ApplyEpoch(epJoin)
+		lane2, err := availState.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
+			got, ok := opt.Get()
+			return ok && got != lane0
+		})
+		if err != nil {
+			return err
+		}
+		got, ok := lane2.Get()
+		if !ok {
+			return fmt.Errorf("expected rejoined LocalLane")
+		}
+		if _, err = availState.Block(ctx, got, 0); err != nil {
+			return err
+		}
+		_, err = env.state.InsertTx(ctx, env.genTx(rng, addr, app.EvmNonce(addr)).encode())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

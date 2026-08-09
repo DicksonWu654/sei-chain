@@ -8,8 +8,17 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/autobahn/types"
 )
 
-func (s *State) SubscribeLaneProposals(first types.BlockNumber) *LaneProposalsRecv {
-	return &LaneProposalsRecv{s, s.key.Public(), first}
+// SubscribeLaneProposals binds LocalLane at subscribe time. After leave, serves
+// the leave map until tipEpoch prune → ErrLanePruned; rejoin needs a new Subscribe.
+//
+// Back-leash (AppQC in prior epoch before ActivateEpoch) means tipEpoch prune
+// drops the leave map before rejoin, so Recv ends before LocalLane is Some(new).
+func (s *State) SubscribeLaneProposals(first types.BlockNumber) (*LaneProposalsRecv, error) {
+	lane, ok := s.LocalLane().Get()
+	if !ok {
+		return nil, ErrBadLane
+	}
+	return &LaneProposalsRecv{s, lane, first}, nil
 }
 
 type LaneProposalsRecv struct {
@@ -25,6 +34,10 @@ func (r *LaneProposalsRecv) Recv(ctx context.Context) (*types.Signed[*types.Lane
 			if errors.Is(err, types.ErrPruned) {
 				r.next += 1
 				continue
+			}
+			if errors.Is(err, ErrBadLane) {
+				// TipEpoch pruned leave map (or DeleteLane race).
+				return nil, ErrLanePruned
 			}
 			return nil, fmt.Errorf("x.avail.Block(): %w", err)
 		}

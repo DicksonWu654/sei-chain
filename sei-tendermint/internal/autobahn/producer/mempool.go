@@ -16,6 +16,9 @@ var errTooLarge = errors.New("transaction too large")
 var errBadNonce = errors.New("bad nonce")
 var errMempoolFull = errors.New("mempool is full")
 
+// ErrNotProducing: LocalLane None or mempool not aligned (leave / pre-align gap).
+var ErrNotProducing = errors.New("not producing")
+
 type blockSpec struct {
 	gasEstimated uint64
 	gasWanted    uint64
@@ -29,6 +32,7 @@ type blockSpec struct {
 
 type mempool struct {
 	capacity  uint64
+	lane      utils.Option[types.LaneID]
 	first     types.BlockNumber
 	next      types.BlockNumber
 	blocks    map[types.BlockNumber]*blockSpec
@@ -75,13 +79,6 @@ func (s *State) EvmTxByHash(hash common.Hash) (tmtypes.Tx, bool) {
 	for m := range s.mempool.Lock() {
 		tx, ok := m.evmTxs[hash]
 		return tx, ok
-	}
-	panic("unreachable")
-}
-
-func (s *State) mempoolFirst() types.BlockNumber {
-	for m := range s.mempool.Lock() {
-		return m.first
 	}
 	panic("unreachable")
 }
@@ -165,18 +162,38 @@ func (s *State) insertTx(ctx context.Context, tx tmtypes.Tx, waitIfFull bool) (*
 	}
 
 	for m, ctrl := range s.mempool.Lock() {
-		if waitIfFull {
+		for {
+			local, ok := s.consensus.Avail().LocalLane().Get()
+			if !ok {
+				return nil, ErrNotProducing
+			}
+			cur, hasLane := m.lane.Get()
+			if !hasLane || cur != local {
+				return nil, ErrNotProducing
+			}
+			if !m.IsFull() {
+				break
+			}
+			if !waitIfFull {
+				return nil, errMempoolFull
+			}
 			// mempool is constructed as a FIFO - we do not delay insertions of large txs (going over cap)
 			// in favor of waiting for smaller txs. This simple algorithm allows us to cap
 			// pending txs to size of a single block. We can refine this rule later if needed.
 			// NOTE: in case there are N concurrent InsertTx calls, this condition is reevaluated N times
 			// every time mempool is updated. Depending on proportion of N to the block size it might get too
 			// expensive.
-			if err := ctrl.WaitUntil(ctx, func() bool { return !m.IsFull() }); err != nil {
+			// Also wake on leave/realign so leave cannot stall on IsFull forever.
+			if err := ctrl.WaitUntil(ctx, func() bool {
+				loc, ok := s.consensus.Avail().LocalLane().Get()
+				if !ok {
+					return true
+				}
+				cur, ok := m.lane.Get()
+				return !ok || cur != loc || !m.IsFull()
+			}); err != nil {
 				return nil, err
 			}
-		} else if m.IsFull() {
-			return nil, errMempoolFull
 		}
 		if resp.IsEVM {
 			addr := resp.EVMSenderAddress
