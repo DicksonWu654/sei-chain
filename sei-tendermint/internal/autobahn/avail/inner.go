@@ -85,8 +85,10 @@ func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) 
 		return i, nil
 	}
 
-	// Re-attach persisted WALs before prune. Skip e_join<=N absent from anchor
-	// committee (those LaneIDs never rejoin; proposal ranges may omit empty lanes).
+	// Re-attach persisted WALs before prune. Skip tip-stale leave WALs:
+	// e_join <= anchorEpoch and absent from the anchor committee (same rule as
+	// staleLaneDisposable's e_join < tip: membership at e implies e_join <= e).
+	// Those LaneIDs never rejoin; proposal ranges may omit empty lanes.
 	var anchorEpoch types.EpochIndex
 	var anchorCommittee *types.Committee
 	if anchor, ok := l.pruneAnchor.Get(); ok {

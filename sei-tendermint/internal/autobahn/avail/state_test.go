@@ -551,7 +551,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 			block := types.NewBlock(lane, n, parent, types.GenPayload(rng))
 			signed := types.Sign(keys[0], types.NewLaneProposal(block))
 			parent = block.Header().Hash()
-			require.NoError(t, bp.MaybePruneAndPersistLane(lane, utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{lane.Validator(): 1})), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
+			require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
 		}
 
 		// Release the seeding persister's WAL locks before NewState opens the same directory.
@@ -603,7 +603,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 			block := types.NewBlock(lane, n, parent, types.GenPayload(rng))
 			signed := types.Sign(keys[0], types.NewLaneProposal(block))
 			parent = block.Header().Hash()
-			require.NoError(t, bp.MaybePruneAndPersistLane(lane, utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{lane.Validator(): 1})), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
+			require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
 		}
 
 		// Release the seeding persisters' WAL locks before NewState opens the same directory.
@@ -792,7 +792,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 			block := types.NewBlock(lane, n, parent, types.GenPayload(rng))
 			signed := types.Sign(keys[0], types.NewLaneProposal(block))
 			parent = block.Header().Hash()
-			require.NoError(t, bp.MaybePruneAndPersistLane(lane, utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{lane.Validator(): 1})), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
+			require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{signed}, noBlockCB))
 		}
 
 		// Persist a prune anchor at index 9 with a laneRange that starts past
@@ -851,9 +851,8 @@ func TestNewStateWithPersistence(t *testing.T) {
 		var parent types.BlockHeaderHash
 		block := types.NewBlock(lane, 0, parent, types.GenPayload(rng))
 		proposals := []*types.Signed[*types.LaneProposal]{types.Sign(keys[0], types.NewLaneProposal(block))}
-		active := utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{keys[0].Public(): 1}))
 		require.NoError(t, bp.MaybePruneAndPersistLane(
-			lane, active, utils.None[*types.CommitQC](), proposals, noBlockCB))
+			lane, true, utils.None[*types.CommitQC](), proposals, noBlockCB))
 		require.NoError(t, bp.Close())
 
 		// A prune anchor missing its CommitQC unmarshals as proto but fails PruneAnchorConv.Decode, so

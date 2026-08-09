@@ -233,7 +233,9 @@ func NewBlockPersister(stateDir utils.Option[string]) (*BlockPersister, map[type
 		}
 		lane, err := types.LaneIDFromBytes(laneBytes)
 		if err != nil {
-			logger.Warn("skipping lane dir with invalid LaneID", "name", e.Name(), "err", err)
+			// Pre-LaneID hex(pubkey) dirs fail to parse; they leak until the
+			// operator wipes persistent_state_dir (no migration in this PR).
+			logger.Warn("skipping lane dir with invalid LaneID (leaks until state wipe)", "name", e.Name(), "err", err)
 			continue
 		}
 		lanePath := filepath.Join(dir, e.Name())
@@ -297,9 +299,9 @@ func (bp *BlockPersister) getLane(lane types.LaneID, allowCreate bool) (lw *lane
 //   - anchor empty, proposals non-empty: append only, no truncation.
 //   - anchor empty, proposals empty:     no-op.
 //
-// active: open WALs for HasLane; leavers flush if already open. Non-empty
-// proposals still allowCreate so a leave before first open flushes tips
-// (post-DeleteLane batches omit the lane, so prune does not recreate).
+// allowCreate: open a WAL if missing. Avail passes true for active lanes, or when
+// proposals are non-empty so a leave before the first open still flushes tips.
+// After DeleteLane, empty-proposal prune passes false so the WAL is not recreated.
 //
 // afterEach, when present, is called once per appended proposal in order, after the whole batch has
 // been flushed — never before, because an append is not durable until then and afterEach is what
@@ -312,7 +314,7 @@ func (bp *BlockPersister) getLane(lane types.LaneID, allowCreate bool) (lw *lane
 // so concurrent calls on the same lane serialize correctly.
 func (bp *BlockPersister) MaybePruneAndPersistLane(
 	lane types.LaneID,
-	active *types.Committee,
+	allowCreate bool,
 	anchor utils.Option[*types.CommitQC],
 	proposals []*types.Signed[*types.LaneProposal],
 	afterEach utils.Option[func(*types.Signed[*types.LaneProposal])],
@@ -326,7 +328,6 @@ func (bp *BlockPersister) MaybePruneAndPersistLane(
 		return nil
 	}
 
-	allowCreate := active.HasLane(lane) || len(proposals) > 0
 	lw, ok, err := bp.getLane(lane, allowCreate)
 	if err != nil {
 		return err

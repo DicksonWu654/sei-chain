@@ -17,10 +17,6 @@ func testSignedProposal(rng utils.Rng, key types.SecretKey, n types.BlockNumber)
 	return types.Sign(key, types.NewLaneProposal(block))
 }
 
-func committeeForLane(lane types.LaneID) *types.Committee {
-	return utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{lane.Validator(): 1}))
-}
-
 var noBlockCB = utils.None[func(*types.Signed[*types.LaneProposal])]()
 
 // liveBlocks drops blocks the prune anchor has moved past, mirroring the filter loadPersistedState
@@ -40,7 +36,7 @@ func testPersistBlock(t *testing.T, bp *BlockPersister, p *types.Signed[*types.L
 	lane := p.Msg().Block().Header().Lane()
 	require.NoError(t, bp.MaybePruneAndPersistLane(
 		lane,
-		committeeForLane(lane),
+		true,
 		utils.None[*types.CommitQC](),
 		[]*types.Signed[*types.LaneProposal]{p},
 		noBlockCB,
@@ -223,11 +219,11 @@ func TestNoOpBlockPersister(t *testing.T) {
 	// Verify afterEach is still invoked for every proposal.
 	var called int
 	cb := utils.Some(func(_ *types.Signed[*types.LaneProposal]) { called++ })
-	require.NoError(t, bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), proposals[:3], cb))
+	require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), proposals[:3], cb))
 	require.Equal(t, 3, called)
 
 	called = 0
-	require.NoError(t, bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), proposals[3:], cb))
+	require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), proposals[3:], cb))
 	require.Equal(t, 2, called)
 
 	require.NoError(t, bp.Close())
@@ -306,7 +302,7 @@ func TestDeleteBeforePastAllRejectsStaleBlock(t *testing.T) {
 
 	// Writing a stale block number (0) should be rejected.
 	stale := testSignedProposal(rng, key, 0)
-	err = bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{stale}, noBlockCB)
+	err = bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{stale}, noBlockCB)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of sequence")
 
@@ -410,13 +406,13 @@ func TestPersistBlockOutOfSequence(t *testing.T) {
 
 	// Gap: skip block 1, try block 2.
 	gap := testSignedProposal(rng, key, 2)
-	err = bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{gap}, noBlockCB)
+	err = bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{gap}, noBlockCB)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of sequence")
 
 	// Duplicate: try block 0 again.
 	dup := testSignedProposal(rng, key, 0)
-	err = bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{dup}, noBlockCB)
+	err = bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), []*types.Signed[*types.LaneProposal]{dup}, noBlockCB)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of sequence")
 
@@ -532,7 +528,7 @@ func TestPersistBlockInvokesAfterEachOncePerBlock(t *testing.T) {
 	cb := utils.Some(func(p *types.Signed[*types.LaneProposal]) {
 		seen = append(seen, p.Msg().Block().Header().BlockNumber())
 	})
-	require.NoError(t, bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), proposals, cb))
+	require.NoError(t, bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), proposals, cb))
 	require.NoError(t, bp.Close())
 
 	require.Equal(t, len(proposals), len(seen))
@@ -568,7 +564,7 @@ func TestPersistBlockConcurrentDistinctLanes(t *testing.T) {
 		for i := range numLanes {
 			lane := types.NewLaneID(keys[i].Public(), 0)
 			ps.Spawn(func() error {
-				return bp.MaybePruneAndPersistLane(lane, committeeForLane(lane), utils.None[*types.CommitQC](), proposals[i], noBlockCB)
+				return bp.MaybePruneAndPersistLane(lane, true, utils.None[*types.CommitQC](), proposals[i], noBlockCB)
 			})
 		}
 		return nil
@@ -598,7 +594,6 @@ func TestMaybePruneAndPersistLane_InactiveDoesNotRecreateAfterDelete(t *testing.
 	t.Cleanup(func() { _ = bp.Close() })
 
 	leaver := types.GenSecretKey(rng)
-	stayer := types.GenSecretKey(rng)
 	lane := types.NewLaneID(leaver.Public(), 0)
 	proposal := types.Sign(leaver, types.NewLaneProposal(
 		types.NewBlock(lane, 0, types.BlockHeaderHash{}, types.GenPayload(rng)),
@@ -606,7 +601,7 @@ func TestMaybePruneAndPersistLane_InactiveDoesNotRecreateAfterDelete(t *testing.
 
 	require.NoError(t, bp.MaybePruneAndPersistLane(
 		lane,
-		committeeForLane(lane),
+		true,
 		utils.None[*types.CommitQC](),
 		[]*types.Signed[*types.LaneProposal]{proposal},
 		noBlockCB,
@@ -617,11 +612,9 @@ func TestMaybePruneAndPersistLane_InactiveDoesNotRecreateAfterDelete(t *testing.
 	require.True(t, os.IsNotExist(err))
 	require.NoError(t, bp.DeleteLane(lane)) // idempotent
 
-	active := utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{stayer.Public(): 1}))
-	require.False(t, active.HasLane(lane))
 	require.NoError(t, bp.MaybePruneAndPersistLane(
 		lane,
-		active,
+		false, // after DeleteLane: truncate-only must not recreate
 		utils.None[*types.CommitQC](),
 		nil,
 		noBlockCB,
@@ -640,17 +633,15 @@ func TestMaybePruneAndPersistLane_InactiveWithProposalsCreatesWAL(t *testing.T) 
 	t.Cleanup(func() { _ = bp.Close() })
 
 	leaver := types.GenSecretKey(rng)
-	stayer := types.GenSecretKey(rng)
 	lane := types.NewLaneID(leaver.Public(), 0)
 	proposal := types.Sign(leaver, types.NewLaneProposal(
 		types.NewBlock(lane, 0, types.BlockHeaderHash{}, types.GenPayload(rng)),
 	))
 
-	active := utils.OrPanic1(types.NewCommittee(map[types.PublicKey]uint64{stayer.Public(): 1}))
-	require.False(t, active.HasLane(lane))
+	// Inactive leave still flushes when proposals are non-empty (allowCreate=true).
 	require.NoError(t, bp.MaybePruneAndPersistLane(
 		lane,
-		active,
+		true,
 		utils.None[*types.CommitQC](),
 		[]*types.Signed[*types.LaneProposal]{proposal},
 		noBlockCB,

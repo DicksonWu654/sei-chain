@@ -99,7 +99,7 @@ func (r *Registry) ActivateEpoch(
 // VerifyInWindow calls fn against the latest epoch's committee and returns it if accepted.
 // Returns a slice of all matching epochs so callers can skip re-verification for any
 // epoch already checked here.
-// TODO: expand to neighbor epochs (previous and next) once multi-epoch transitions are wired up.
+// TODO(#3736): expand to neighbor epochs (previous and next) once multi-epoch transitions are wired up.
 func (r *Registry) VerifyInWindow(fn func(*types.Committee) error) ([]*types.Epoch, error) {
 	for s := range r.state.RLock() {
 		ep := s.m[s.latest]
