@@ -757,21 +757,25 @@ func (s *State) fullCommitQC(ctx context.Context, n types.RoadIndex) (*types.Ful
 
 // WaitForLocalCapacity waits until the lane has capacity for toProduce.
 // ErrBadLane if the lane left committee or its map was tipEpoch-pruned while waiting.
+// Presence is keyed off blocks (always set for live lanes); persistedBlockStart may
+// be absent on a fresh start (zero start), which is not a prune.
 func (s *State) WaitForLocalCapacity(ctx context.Context, lane types.LaneID, toProduce types.BlockNumber) error {
 	for inner, ctrl := range s.inner.Lock() {
 		if err := ctrl.WaitUntil(ctx, func() bool {
 			if !inner.epoch.Load().Committee().HasLane(lane) {
 				return true
 			}
-			start, ok := inner.persistedBlockStart[lane]
-			return !ok || toProduce < start+BlocksPerLane
+			if _, ok := inner.blocks[lane]; !ok {
+				return true
+			}
+			return toProduce < inner.persistedBlockStart[lane]+BlocksPerLane
 		}); err != nil {
 			return err
 		}
 		if !inner.epoch.Load().Committee().HasLane(lane) {
 			return ErrBadLane
 		}
-		if _, ok := inner.persistedBlockStart[lane]; !ok {
+		if _, ok := inner.blocks[lane]; !ok {
 			return ErrBadLane
 		}
 	}

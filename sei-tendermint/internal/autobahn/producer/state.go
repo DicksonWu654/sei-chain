@@ -14,7 +14,6 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils/scope"
 	tmtypes "github.com/sei-protocol/sei-chain/sei-tendermint/types"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -121,18 +120,19 @@ func (s *State) Run(ctx context.Context) error {
 			return err
 		}
 
-		g, gctx := errgroup.WithContext(ctx)
-		g.Go(func() error {
-			return s.produceSession(gctx, availState, lane)
-		})
-		g.Go(func() error {
-			// Cancels seal / executed waits that do not observe committee.
-			if err := availState.WaitMustStop(gctx, lane); err != nil {
-				return err
-			}
-			return context.Canceled
-		})
-		if err := utils.IgnoreCancel(g.Wait()); err != nil {
+		if err := utils.IgnoreCancel(scope.Run(ctx, func(ctx context.Context, sc scope.Scope) error {
+			sc.Spawn(func() error {
+				return s.produceSession(ctx, availState, lane)
+			})
+			sc.Spawn(func() error {
+				// Cancels seal / executed waits that do not observe committee.
+				if err := availState.WaitMustStop(ctx, lane); err != nil {
+					return err
+				}
+				return context.Canceled
+			})
+			return nil
+		})); err != nil {
 			return err
 		}
 		s.clearMempool()
