@@ -12,7 +12,12 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-// LaneID is a validator's continuous membership streak; e_join is the join epoch.
+// LaneID identifies a validator's continuous committee membership streak.
+// e_join is the epoch in which that streak began.
+//
+// Identity rules: stay keeps the same LaneID; leave ends that identity; rejoin
+// allocates a new LaneID (typically with tip 0). Avail map retention and tipEpoch
+// dispose live in package avail (see its package doc).
 type LaneID struct {
 	utils.ReadOnly
 	validator PublicKey

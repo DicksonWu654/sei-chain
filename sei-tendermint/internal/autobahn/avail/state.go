@@ -1,3 +1,21 @@
+// Package avail is the Data Availability Plane and Ordered Event Log: lane
+// blocks, CommitQC/AppQC buffers, and pruning.
+//
+// Lane map lifecycle (CON-358; production ApplyEpoch wiring is #3736).
+// Identity rules (stay / leave / rejoin) are on types.LaneID.
+//
+// Maps (inner.blocks / votes / cursors):
+//   - Join/stay: ensured at ApplyEpoch (addCommitteeLanes, then Store epoch).
+//   - Leave: maps remain until tipEpoch (epoch of the first retained CommitQC)
+//     omits the LaneID, then DeleteLane + map drop on the same persist tick.
+//   - Dispose: e_join < tipEpoch && !tipCommittee.HasLane(lane).
+//
+// Subscribe binds LocalLane at subscribe time and serves leave maps until
+// dispose → ErrLanePruned. Produce sessions use WaitProduce / WaitMustStop
+// (same LaneID stay does not end the session).
+//
+// Restart re-attaches leave WALs still needed for tip; skips WALs already
+// tip-stale at the prune anchor (see tipcut skip in newInner).
 package avail
 
 import (
@@ -87,10 +105,10 @@ func (s *State) WaitMustStop(ctx context.Context, lane types.LaneID) error {
 	return err
 }
 
-// ApplyEpoch installs the applied committee: add joiner maps, then Store ep under
-// the inner lock so waiters never observe the new committee before those maps exist.
-// Leavers stay until tipEpoch omits them (persist path). Registry ActivateEpoch is separate.
-// Production wiring of ApplyEpoch is #3736; tests call it directly today.
+// ApplyEpoch installs the applied committee under the inner lock (joiner maps
+// before Store so waiters never observe the new committee without those maps).
+// Leavers stay until tipEpoch dispose (see package doc). Registry ActivateEpoch
+// is separate; production wiring is #3736.
 func (s *State) ApplyEpoch(ep *types.Epoch) {
 	for inner, ctrl := range s.inner.Lock() {
 		inner.addCommitteeLanes(ep.Committee())
@@ -537,30 +555,6 @@ func (s *State) PushAppQC(appQC *types.AppQC, commitQC *types.CommitQC) error {
 	return nil
 }
 
-// waitLaneBound waits until m[lane] is present and n < bound(v), or the lane is
-// gone (tipEpoch drop → ErrBadLane). bound is an exclusive upper limit.
-func waitLaneBound[V any](
-	ctx context.Context,
-	ctrl *utils.WatchCtrl,
-	m map[types.LaneID]V,
-	lane types.LaneID,
-	n types.BlockNumber,
-	bound func(V) types.BlockNumber,
-) (V, error) {
-	var zero V
-	if err := ctrl.WaitUntil(ctx, func() bool {
-		v, ok := m[lane]
-		return !ok || n < bound(v)
-	}); err != nil {
-		return zero, err
-	}
-	v, ok := m[lane]
-	if !ok {
-		return zero, ErrBadLane
-	}
-	return v, nil
-}
-
 // NextBlock returns the index of the next missing block in local storage for the given lane.
 func (s *State) NextBlock(lane types.LaneID) types.BlockNumber {
 	for inner := range s.inner.Lock() {
@@ -577,13 +571,15 @@ func (s *State) NextBlock(lane types.LaneID) types.BlockNumber {
 // Returns ErrBadLane if the lane map is gone (tipEpoch leave prune).
 func (s *State) Block(ctx context.Context, lane types.LaneID, n types.BlockNumber) (*types.Signed[*types.LaneProposal], error) {
 	for inner, ctrl := range s.inner.Lock() {
-		q, err := waitLaneBound(ctx, ctrl, inner.blocks, lane, n,
-			func(q *queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]) types.BlockNumber {
-				return q.next
-			},
-		)
-		if err != nil {
+		if err := ctrl.WaitUntil(ctx, func() bool {
+			q, ok := inner.blocks[lane]
+			return !ok || n < q.next
+		}); err != nil {
 			return nil, err
+		}
+		q, ok := inner.blocks[lane]
+		if !ok {
+			return nil, ErrBadLane
 		}
 		if n < q.first {
 			return nil, types.ErrPruned
@@ -612,14 +608,18 @@ func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LanePropos
 	lane := h.Lane()
 	n := h.BlockNumber()
 	for inner, ctrl := range s.inner.Lock() {
-		q, err := waitLaneBound(ctx, ctrl, inner.blocks, lane, n,
-			func(q *queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]) types.BlockNumber {
-				// exclusive: n <= min(q.next, start+cap-1)
-				return min(q.next, inner.persistedBlockStart[lane]+BlocksPerLane-1) + 1
-			},
-		)
-		if err != nil {
+		if err := ctrl.WaitUntil(ctx, func() bool {
+			q, ok := inner.blocks[lane]
+			if !ok {
+				return true // tipEpoch drop
+			}
+			return n <= min(q.next, inner.persistedBlockStart[lane]+BlocksPerLane-1)
+		}); err != nil {
 			return err
+		}
+		q, ok := inner.blocks[lane]
+		if !ok {
+			return ErrBadLane
 		}
 		// not needed any more
 		if q.next != n {
@@ -668,14 +668,17 @@ func (s *State) PushVote(ctx context.Context, vote *types.Signed[*types.LaneVote
 	lane := h.Lane()
 	n := h.BlockNumber()
 	for inner, ctrl := range s.inner.Lock() {
-		q, err := waitLaneBound(ctx, ctrl, inner.votes, lane, n,
-			func(*queue[types.BlockNumber, blockVotes]) types.BlockNumber {
-				// votes and persistedBlockStart are dropped together
-				return inner.persistedBlockStart[lane] + BlocksPerLane
-			},
-		)
-		if err != nil {
+		if err := ctrl.WaitUntil(ctx, func() bool {
+			if _, ok := inner.votes[lane]; !ok {
+				return true // tipEpoch drop
+			}
+			return n < inner.persistedBlockStart[lane]+BlocksPerLane
+		}); err != nil {
 			return err
+		}
+		q, ok := inner.votes[lane]
+		if !ok {
+			return ErrBadLane
 		}
 		if n < q.first {
 			return nil

@@ -11,8 +11,8 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-// Lane maps: joiners at ApplyEpoch; leavers until tipEpoch omits, then drop + DeleteLane.
-// Restart re-attaches leave WALs; tipEpoch omit cleans them up.
+// Lane maps: joiners at ApplyEpoch; leavers until tipEpoch dispose (package doc).
+// Restart re-attaches leave WALs; tip-stale ones are skipped (tipcut).
 type inner struct {
 	epoch          utils.AtomicSend[*types.Epoch]
 	latestAppQC    utils.Option[*types.AppQC]
@@ -85,10 +85,10 @@ func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) 
 		return i, nil
 	}
 
-	// Re-attach persisted WALs before prune. Skip tip-stale leave WALs:
-	// e_join <= anchorEpoch and absent from the anchor committee (same rule as
-	// staleLaneDisposable's e_join < tip: membership at e implies e_join <= e).
-	// Those LaneIDs never rejoin; proposal ranges may omit empty lanes.
+	// Re-attach persisted WALs before prune. Skip tip-stale leave WALs already
+	// disposable at the prune anchor. Live dispose uses e_join < tip; restart
+	// tipcut skip uses e_join <= tip because a leave tip may be unnamed in the
+	// tipcut proposal while still disposable. Those LaneIDs never rejoin.
 	var anchorEpoch types.EpochIndex
 	var anchorCommittee *types.Committee
 	if anchor, ok := l.pruneAnchor.Get(); ok {
