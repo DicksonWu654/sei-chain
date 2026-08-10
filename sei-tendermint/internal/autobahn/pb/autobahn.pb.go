@@ -529,10 +529,10 @@ func (x *Signature) GetSig() []byte {
 
 type BlockHeader struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	LaneId        *LaneID                `protobuf:"bytes,5,opt,name=lane_id,json=laneId,proto3,oneof" json:"lane_id,omitempty"`                 // required
 	BlockNumber   *uint64                `protobuf:"varint,2,opt,name=block_number,json=blockNumber,proto3,oneof" json:"block_number,omitempty"` // required
 	ParentHash    []byte                 `protobuf:"bytes,3,opt,name=parent_hash,json=parentHash,proto3,oneof" json:"parent_hash,omitempty"`     // required
 	PayloadHash   []byte                 `protobuf:"bytes,4,opt,name=payload_hash,json=payloadHash,proto3,oneof" json:"payload_hash,omitempty"`  // required
-	LaneId        *LaneID                `protobuf:"bytes,5,opt,name=lane_id,json=laneId,proto3,oneof" json:"lane_id,omitempty"`                 // required
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -567,6 +567,13 @@ func (*BlockHeader) Descriptor() ([]byte, []int) {
 	return file_autobahn_autobahn_proto_rawDescGZIP(), []int{9}
 }
 
+func (x *BlockHeader) GetLaneId() *LaneID {
+	if x != nil {
+		return x.LaneId
+	}
+	return nil
+}
+
 func (x *BlockHeader) GetBlockNumber() uint64 {
 	if x != nil && x.BlockNumber != nil {
 		return *x.BlockNumber
@@ -584,13 +591,6 @@ func (x *BlockHeader) GetParentHash() []byte {
 func (x *BlockHeader) GetPayloadHash() []byte {
 	if x != nil {
 		return x.PayloadHash
-	}
-	return nil
-}
-
-func (x *BlockHeader) GetLaneId() *LaneID {
-	if x != nil {
-		return x.LaneId
 	}
 	return nil
 }
@@ -769,10 +769,10 @@ func (x *LaneQC) GetSigs() []*Signature {
 
 type LaneRange struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	LaneId        *LaneID                `protobuf:"bytes,5,opt,name=lane_id,json=laneId,proto3,oneof" json:"lane_id,omitempty"`       // required
 	First         *uint64                `protobuf:"varint,2,opt,name=first,proto3,oneof" json:"first,omitempty"`                      // required
 	Next          *uint64                `protobuf:"varint,3,opt,name=next,proto3,oneof" json:"next,omitempty"`                        // required
 	LastHash      []byte                 `protobuf:"bytes,4,opt,name=last_hash,json=lastHash,proto3,oneof" json:"last_hash,omitempty"` // required
-	LaneId        *LaneID                `protobuf:"bytes,5,opt,name=lane_id,json=laneId,proto3,oneof" json:"lane_id,omitempty"`       // required
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -807,6 +807,13 @@ func (*LaneRange) Descriptor() ([]byte, []int) {
 	return file_autobahn_autobahn_proto_rawDescGZIP(), []int{13}
 }
 
+func (x *LaneRange) GetLaneId() *LaneID {
+	if x != nil {
+		return x.LaneId
+	}
+	return nil
+}
+
 func (x *LaneRange) GetFirst() uint64 {
 	if x != nil && x.First != nil {
 		return *x.First
@@ -824,13 +831,6 @@ func (x *LaneRange) GetNext() uint64 {
 func (x *LaneRange) GetLastHash() []byte {
 	if x != nil {
 		return x.LastHash
-	}
-	return nil
-}
-
-func (x *LaneRange) GetLaneId() *LaneID {
-	if x != nil {
-		return x.LaneId
 	}
 	return nil
 }
@@ -2284,17 +2284,17 @@ const file_autobahn_autobahn_proto_rawDesc = "" +
 	"\x03sig\x18\x02 \x01(\fB\x06؈\xe2\xab\f@H\x01R\x03sig\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\x06\n" +
 	"\x04_keyB\x06\n" +
 	"\x04_sig\"\x9b\x02\n" +
-	"\vBlockHeader\x12&\n" +
-	"\fblock_number\x18\x02 \x01(\x04H\x00R\vblockNumber\x88\x01\x01\x12,\n" +
-	"\vparent_hash\x18\x03 \x01(\fB\x06؈\xe2\xab\f H\x01R\n" +
+	"\vBlockHeader\x12.\n" +
+	"\alane_id\x18\x05 \x01(\v2\x10.autobahn.LaneIDH\x00R\x06laneId\x88\x01\x01\x12&\n" +
+	"\fblock_number\x18\x02 \x01(\x04H\x01R\vblockNumber\x88\x01\x01\x12,\n" +
+	"\vparent_hash\x18\x03 \x01(\fB\x06؈\xe2\xab\f H\x02R\n" +
 	"parentHash\x88\x01\x01\x12.\n" +
-	"\fpayload_hash\x18\x04 \x01(\fB\x06؈\xe2\xab\f H\x02R\vpayloadHash\x88\x01\x01\x12.\n" +
-	"\alane_id\x18\x05 \x01(\v2\x10.autobahn.LaneIDH\x03R\x06laneId\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\x0f\n" +
+	"\fpayload_hash\x18\x04 \x01(\fB\x06؈\xe2\xab\f H\x03R\vpayloadHash\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\n" +
+	"\n" +
+	"\b_lane_idB\x0f\n" +
 	"\r_block_numberB\x0e\n" +
 	"\f_parent_hashB\x0f\n" +
-	"\r_payload_hashB\n" +
-	"\n" +
-	"\b_lane_idJ\x04\b\x01\x10\x02R\x04lane\"\xd5\x02\n" +
+	"\r_payload_hashJ\x04\b\x01\x10\x02R\x04lane\"\xd5\x02\n" +
 	"\aPayload\x127\n" +
 	"\n" +
 	"created_at\x18\x01 \x01(\v2\x13.autobahn.TimestampH\x00R\tcreatedAt\x88\x01\x01\x12-\n" +
@@ -2314,17 +2314,17 @@ const file_autobahn_autobahn_proto_rawDesc = "" +
 	"\x06LaneQC\x12)\n" +
 	"\x04vote\x18\x01 \x01(\v2\x15.autobahn.BlockHeaderR\x04vote\x12/\n" +
 	"\x04sigs\x18\x02 \x03(\v2\x13.autobahn.SignatureB\x06Ј\xe2\xab\fdR\x04sigs:\x06\xe8\x88\xe2\xab\f\x01\"\xe0\x01\n" +
-	"\tLaneRange\x12\x19\n" +
-	"\x05first\x18\x02 \x01(\x04H\x00R\x05first\x88\x01\x01\x12\x17\n" +
-	"\x04next\x18\x03 \x01(\x04H\x01R\x04next\x88\x01\x01\x12(\n" +
-	"\tlast_hash\x18\x04 \x01(\fB\x06؈\xe2\xab\f H\x02R\blastHash\x88\x01\x01\x12.\n" +
-	"\alane_id\x18\x05 \x01(\v2\x10.autobahn.LaneIDH\x03R\x06laneId\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\b\n" +
+	"\tLaneRange\x12.\n" +
+	"\alane_id\x18\x05 \x01(\v2\x10.autobahn.LaneIDH\x00R\x06laneId\x88\x01\x01\x12\x19\n" +
+	"\x05first\x18\x02 \x01(\x04H\x01R\x05first\x88\x01\x01\x12\x17\n" +
+	"\x04next\x18\x03 \x01(\x04H\x02R\x04next\x88\x01\x01\x12(\n" +
+	"\tlast_hash\x18\x04 \x01(\fB\x06؈\xe2\xab\f H\x03R\blastHash\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\n" +
+	"\n" +
+	"\b_lane_idB\b\n" +
 	"\x06_firstB\a\n" +
 	"\x05_nextB\f\n" +
 	"\n" +
-	"_last_hashB\n" +
-	"\n" +
-	"\b_lane_idJ\x04\b\x01\x10\x02R\x04lane\"\x97\x01\n" +
+	"_last_hashJ\x04\b\x01\x10\x02R\x04lane\"\x97\x01\n" +
 	"\x04View\x12\x19\n" +
 	"\x05index\x18\x01 \x01(\x04H\x00R\x05index\x88\x01\x01\x12\x1b\n" +
 	"\x06number\x18\x02 \x01(\x04H\x01R\x06number\x88\x01\x01\x12$\n" +
