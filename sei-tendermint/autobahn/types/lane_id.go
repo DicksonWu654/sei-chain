@@ -34,10 +34,10 @@ func (l LaneID) EJoin() EpochIndex { return l.eJoin }
 
 // Compare orders by validator, then e_join.
 func (l LaneID) Compare(other LaneID) int {
-	if c := l.validator.Compare(other.validator); c != 0 {
-		return c
-	}
-	return cmp.Compare(l.eJoin, other.eJoin)
+	return cmp.Or(
+		l.validator.Compare(other.validator),
+		cmp.Compare(l.eJoin, other.eJoin),
+	)
 }
 
 // Bytes returns a stable encoding: pubkey bytes || big-endian e_join.

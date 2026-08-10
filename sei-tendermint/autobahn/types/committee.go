@@ -23,8 +23,13 @@ func (s ImSlice[T]) All() iter.Seq[T] { return slices.Values(s.s) }
 
 // Committee represents the consensus committee.
 // Lanes carry membership (validator + e_join); weights are voting stake.
+//
+// Members are totally ordered for Leader/EvmShard lottery and tipcut header
+// concatenation. Replicas order by PublicKey; lanes by LaneID.Compare
+// (validator, then e_join). With one lane per validator those coincide, so
+// walking Lanes() is walking replica order.
 type Committee struct {
-	lanes       ImSlice[LaneID] // sorted; one lane per member
+	lanes       ImSlice[LaneID] // sorted by LaneID.Compare; one per member
 	byValidator map[PublicKey]LaneID
 	weights     map[PublicKey]uint64
 	totalWeight uint64
@@ -50,10 +55,11 @@ func (c *Committee) Lane(v PublicKey) utils.Option[LaneID] {
 	return utils.Some(lane)
 }
 
-// Lanes is the list of nodes which are eligible to produce blocks.
+// Lanes returns members in LaneID order (see Committee).
 func (c *Committee) Lanes() ImSlice[LaneID] { return c.lanes }
 
 // Deterministic random oracle selecting a replica with probability proportional to the weight.
+// Walks Lanes() so seed → PublicKey is network-wide deterministic (see Committee).
 func (c *Committee) randomReplica(seed []byte) PublicKey {
 	h := sha256.Sum256(seed[:])
 	var x, total uint256.Int
@@ -147,15 +153,13 @@ func ActivateCommittee(prev *Committee, weights map[PublicKey]uint64, e EpochInd
 	}
 	lanes := make([]LaneID, 0, len(weights))
 	for v := range weights {
-		eJoin := e
-		if prevLane, ok := prev.Lane(v).Get(); ok {
-			eJoin = prevLane.eJoin
-		}
-		lanes = append(lanes, NewLaneID(v, eJoin))
+		lanes = append(lanes, prev.Lane(v).Or(NewLaneID(v, e)))
 	}
 	return finalizeCommittee(lanes, weights, totalWeight)
 }
 
+// normalizeWeights clones weights, drops zero entries, and returns the filtered
+// map plus total stake. Errors on overflow or empty total.
 func normalizeWeights(weights map[PublicKey]uint64) (map[PublicKey]uint64, uint64, error) {
 	weights = maps.Clone(weights)
 	totalWeight := uint64(0)

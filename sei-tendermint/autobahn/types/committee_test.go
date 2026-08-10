@@ -25,7 +25,7 @@ func TestNewCommittee_FiltersOutZeroWeightValidators(t *testing.T) {
 	if committee.HasReplica(zeroWeightKey) {
 		t.Fatal("HasReplica() = true for zero-weight validator, want false")
 	}
-	if !committee.HasLane(NewLaneID(nonZeroWeightKey, 0)) {
+	if !committee.HasLane(committee.Lane(nonZeroWeightKey).OrPanic("member")) {
 		t.Fatal("HasLane(nonZero@e0) = false, want true")
 	}
 	if got := committee.Lanes().Len(); got != 1 {
@@ -91,7 +91,8 @@ func makeEpoch(rng utils.Rng) (*Epoch, []SecretKey) {
 func TestLaneQCVerifyChecksWeight(t *testing.T) {
 	rng := utils.TestRng()
 	ep, keys := makeEpoch(rng)
-	vote := NewLaneVote(NewBlock(NewLaneID(keys[0].Public(), 0), 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
+	lane := ep.Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
+	vote := NewLaneVote(NewBlock(lane, 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
 
 	heavyOnly := NewLaneQC([]*Signed[*LaneVote]{
 		Sign(keys[0], vote),
