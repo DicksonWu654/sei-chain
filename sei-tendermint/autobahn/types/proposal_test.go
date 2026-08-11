@@ -327,7 +327,7 @@ func TestProposalVerifyRejectsNonCommitteeLane(t *testing.T) {
 
 	// Keep the non-empty committee tipcut and add a non-committee lane.
 	// LaneRange.Verify rejects X because it's not a committee lane.
-	extraLane := NewLaneID(GenSecretKey(rng).Public(), GenEpochIndex(rng))
+	extraLane := LaneID{Validator: GenSecretKey(rng).Public(), Joined: GenEpochIndex(rng)}
 	require.False(t, committee.HasLane(extraLane))
 
 	origProposal := fp.Proposal().Msg()

@@ -36,7 +36,7 @@ func TestSubscribeLaneProposals_ErrLanePrunedAfterMapDrop(t *testing.T) {
 	state.ApplyEpoch(ep)
 
 	// Wrong producer key is rejected even if that peer has a lane in the committee.
-	otherLane := types.NewLaneID(b.Public(), ep.EpochIndex())
+	otherLane := types.LaneID{Validator: b.Public(), Joined: ep.EpochIndex()}
 	_, err = state.SubscribeLaneProposals(otherLane, 0)
 	require.ErrorIs(t, err, ErrBadLane)
 
@@ -61,12 +61,12 @@ func TestSubscribeLaneProposals_WrongValidator(t *testing.T) {
 	ds := utils.OrPanic1(data.NewState(&data.Config{Registry: registry}, db))
 	state := utils.OrPanic1(NewState(a, ds, utils.None[string]()))
 
-	_, err := state.SubscribeLaneProposals(types.NewLaneID(b.Public(), 0), 0)
+	_, err := state.SubscribeLaneProposals(types.LaneID{Validator: b.Public(), Joined: 0}, 0)
 	require.ErrorIs(t, err, ErrBadLane)
 }
 
-// Leave → tip dispose → rejoin allocates a new LaneID; WaitLane skips the closed
-// identity and Subscribe serves the new lane (StreamLaneProposals client path).
+// Leave → closed at epochOfFirst → rejoin allocates a new LaneID; WaitLane skips
+// the closed identity and Subscribe serves the new lane (StreamLaneProposals client path).
 func TestWaitLane_LeaveRejoinNewLaneID(t *testing.T) {
 	ctx := t.Context()
 	rng := utils.TestRng()
@@ -89,7 +89,7 @@ func TestWaitLane_LeaveRejoinNewLaneID(t *testing.T) {
 	_, err = sub.Recv(ctx)
 	require.NoError(t, err)
 
-	// Leave: a out of committee. Leave map still serves until dispose.
+	// Leave: a out of committee. Closing-lane maps still serve until IsClosed.
 	epLeave, err := registry.ActivateEpoch(
 		map[types.PublicKey]uint64{b.Public(): 1},
 		types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
@@ -98,7 +98,7 @@ func TestWaitLane_LeaveRejoinNewLaneID(t *testing.T) {
 	state.ApplyEpoch(epLeave)
 	require.False(t, state.LocalLane().IsPresent())
 
-	// Tip dispose of leave map → stream ends (ErrLanePruned).
+	// Maps dropped for closed lane → stream ends (ErrLanePruned).
 	for inner, ctrl := range state.inner.Lock() {
 		inner.dropLanes([]types.LaneID{lane0})
 		ctrl.Updated()
@@ -122,7 +122,7 @@ func TestWaitLane_LeaveRejoinNewLaneID(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	// Rejoin under a new LaneID (Joined = leave epoch index).
+	// Rejoin under a new LaneID (Joined = epoch of rejoin).
 	epJoin, err := registry.ActivateEpoch(
 		map[types.PublicKey]uint64{a.Public(): 1, b.Public(): 1},
 		types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
@@ -142,7 +142,7 @@ func TestWaitLane_LeaveRejoinNewLaneID(t *testing.T) {
 	}
 	cancel()
 
-	// New subscribe on the rejoin lane; closed lane0 still key-ok but map gone → prune on Recv.
+	// New subscribe on the rejoin lane; closed lane0 still key-ok but map gone → ErrLanePruned on Recv.
 	sub0, err := state.SubscribeLaneProposals(lane0, 0)
 	require.NoError(t, err)
 	_, err = sub0.Recv(ctx)

@@ -24,12 +24,11 @@ func (s ImSlice[T]) All() iter.Seq[T] { return slices.Values(s.s) }
 // Committee represents the consensus committee.
 // Lanes carry membership (validator + joined); weights are voting stake.
 //
-// Membership order is replica order (PublicKey.Compare). Leader/EvmShard and
-// tipcut header concatenation walk that order. Lanes() follows the same order
-// (one LaneID per replica); LaneID.Compare is for sorting lane lists elsewhere.
+// Membership order is done by comparing pubkeys, so that it is consistent
+// across the board for weighted proposer selection. Lanes() use that order.
 type Committee struct {
-	lanes       ImSlice[LaneID] // in Replicas() order; one per member
-	byValidator map[PublicKey]LaneID
+	validators  ImSlice[PublicKey] // membership order
+	lanes       map[PublicKey]LaneID
 	weights     map[PublicKey]uint64
 	totalWeight uint64
 }
@@ -42,12 +41,12 @@ func (c *Committee) HasReplica(k PublicKey) bool {
 }
 
 func (c *Committee) HasLane(l LaneID) bool {
-	got, ok := c.byValidator[l.Validator]
+	got, ok := c.lanes[l.Validator]
 	return ok && got.Joined == l.Joined
 }
 
 func (c *Committee) Lane(v PublicKey) utils.Option[LaneID] {
-	lane, ok := c.byValidator[v]
+	lane, ok := c.lanes[v]
 	if !ok {
 		return utils.None[LaneID]()
 	}
@@ -56,17 +55,17 @@ func (c *Committee) Lane(v PublicKey) utils.Option[LaneID] {
 
 // Replicas yields validators in PublicKey order (membership order).
 func (c *Committee) Replicas() iter.Seq[PublicKey] {
-	return func(yield func(PublicKey) bool) {
-		for lane := range c.lanes.All() {
-			if !yield(lane.Validator) {
-				return
-			}
-		}
-	}
+	return c.validators.All()
 }
 
 // Lanes returns each replica's LaneID in Replicas() order.
-func (c *Committee) Lanes() ImSlice[LaneID] { return c.lanes }
+func (c *Committee) Lanes() ImSlice[LaneID] {
+	out := make([]LaneID, 0, c.validators.Len())
+	for v := range c.validators.All() {
+		out = append(out, c.lanes[v])
+	}
+	return ImSlice[LaneID]{out}
+}
 
 // Deterministic random oracle selecting a replica with probability proportional to the weight.
 // Walks membership (Replicas) order so seed → PublicKey is network-wide deterministic.
@@ -139,39 +138,26 @@ func (c *Committee) LaneQuorum() uint64 {
 	return c.Faulty() + 1
 }
 
-// NewCommittee is genesis: joined = 0 for every member.
+// NewCommittee is genesis: Joined = 0 for every member.
 func NewCommittee(weights map[PublicKey]uint64) (*Committee, error) {
-	weights, totalWeight, err := normalizeWeights(weights)
-	if err != nil {
-		return nil, err
-	}
-	lanes := make([]LaneID, 0, len(weights))
-	for v := range weights {
-		lanes = append(lanes, NewLaneID(v, 0))
-	}
-	return newCommittee(lanes, weights, totalWeight)
+	return newCommittee(nil, weights, 0)
 }
 
 // DeriveNext builds the committee for epoch e>0 from this committee:
-// copy joined on stay, stamp e on join. EpochIndex stays on Epoch, not Committee.
+// copy Joined on stay, stamp e on join. EpochIndex stays on Epoch, not Committee.
 func (c *Committee) DeriveNext(weights map[PublicKey]uint64, e EpochIndex) (*Committee, error) {
 	if e == 0 {
 		return nil, errors.New("DeriveNext: epoch must be > 0")
 	}
-	weights, totalWeight, err := normalizeWeights(weights)
-	if err != nil {
-		return nil, err
-	}
-	lanes := make([]LaneID, 0, len(weights))
-	for v := range weights {
-		lanes = append(lanes, c.Lane(v).Or(NewLaneID(v, e)))
-	}
-	return newCommittee(lanes, weights, totalWeight)
+	return newCommittee(c.lanes, weights, e)
 }
 
-// normalizeWeights clones weights, drops zero entries, and returns the filtered
-// map plus total stake. Errors on overflow or empty total.
-func normalizeWeights(weights map[PublicKey]uint64) (map[PublicKey]uint64, uint64, error) {
+// newCommittee builds a committee from weights for epoch e.
+// prev is the prior epoch's lanes (nil for genesis).
+//
+// Weight handling: drop zero-weights, sum stake (error on overflow or empty total),
+// reject more than MaxValidators members.
+func newCommittee(prev map[PublicKey]LaneID, weights map[PublicKey]uint64, e EpochIndex) (*Committee, error) {
 	weights = maps.Clone(weights)
 	totalWeight := uint64(0)
 	for k, w := range weights {
@@ -180,41 +166,30 @@ func normalizeWeights(weights map[PublicKey]uint64) (map[PublicKey]uint64, uint6
 			continue
 		}
 		if utils.Max[uint64]()-totalWeight < w {
-			return nil, 0, fmt.Errorf("total weight overflow")
+			return nil, fmt.Errorf("total weight overflow")
 		}
 		totalWeight += w
 	}
 	if totalWeight == 0 {
-		return nil, 0, errors.New("total weight is 0")
+		return nil, errors.New("total weight is 0")
 	}
 	if len(weights) > MaxValidators {
-		return nil, 0, fmt.Errorf("too many validators: got %d, want <= %d", len(weights), MaxValidators)
+		return nil, fmt.Errorf("too many validators: got %d, want <= %d", len(weights), MaxValidators)
 	}
-	return weights, totalWeight, nil
-}
 
-// newCommittee rejects duplicate validators, orders replicas by PublicKey,
-// and stores lanes in that same order (one LaneID per replica).
-func newCommittee(lanes []LaneID, weights map[PublicKey]uint64, totalWeight uint64) (*Committee, error) {
-	byValidator := make(map[PublicKey]LaneID, len(lanes))
-	for _, lane := range lanes {
-		if _, ok := byValidator[lane.Validator]; ok {
-			return nil, fmt.Errorf(
-				"duplicate validator in committee lanes: %q with joined %d and %d",
-				lane.Validator, byValidator[lane.Validator].Joined, lane.Joined,
-			)
+	lanes := make(map[PublicKey]LaneID, len(weights))
+	for v := range weights {
+		if old, ok := prev[v]; ok {
+			lanes[v] = old
+		} else {
+			lanes[v] = LaneID{Validator: v, Joined: e}
 		}
-		byValidator[lane.Validator] = lane
 	}
-	replicas := slices.Collect(maps.Keys(byValidator))
-	slices.SortFunc(replicas, PublicKey.Compare)
-	ordered := make([]LaneID, len(replicas))
-	for i, v := range replicas {
-		ordered[i] = byValidator[v]
-	}
+	validators := slices.Collect(maps.Keys(lanes))
+	slices.SortFunc(validators, PublicKey.Compare)
 	return &Committee{
-		lanes:       ImSlice[LaneID]{ordered},
-		byValidator: byValidator,
+		validators:  ImSlice[PublicKey]{validators},
+		lanes:       lanes,
 		weights:     weights,
 		totalWeight: totalWeight,
 	}, nil

@@ -56,7 +56,7 @@ func TestAvailClientServer(t *testing.T) {
 		})
 		corruptAvail := corrupt.consensus.Avail()
 		a2 := nodes[2].consensus.Avail()
-		lane0 := types.NewLaneID(activeKeys[0].Public(), 0)
+		lane0 := types.LaneID{Validator: activeKeys[0].Public(), Joined: 0}
 		corruptRng := rng.Split()
 		s.SpawnBg(func() error {
 			if _, err := a2.Block(ctx, lane0, 0); err != nil && !errors.Is(err, types.ErrPruned) {

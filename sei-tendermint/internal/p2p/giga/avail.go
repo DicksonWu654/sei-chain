@@ -31,8 +31,8 @@ func (x *Service) serverStreamLaneProposals(ctx context.Context, server rpc.Serv
 		for {
 			p, err := sub.Recv(ctx)
 			if err != nil {
-				// Lane closed / tipcut pruned: end the stream cleanly so the client
-				// can wait for a new LaneID of this producer.
+				// Lane closed: end the stream cleanly so the client can wait for
+				// a new LaneID of this producer.
 				if errors.Is(err, avail.ErrLanePruned) {
 					return nil
 				}
@@ -146,8 +146,8 @@ func (x *Service) clientStreamLaneProposals(ctx context.Context, c rpc.Client[AP
 		// Stream ended. Only exclude when the applied committee has dropped or
 		// replaced this LaneID (leave / rejoin). If it is still present, reconnect
 		// to the same identity — a Stay / transport blip must not hang on
-		// WaitLane(exclude). Rejoin is at least one epoch after leave, so tip prune
-		// of the leave map lands before a new LaneID; we do not need to cancel the
+		// WaitLane(exclude). Rejoin is at least one epoch after leave, so the old
+		// LaneID is closed before a new one appears; we do not need to cancel the
 		// old stream early on rejoin.
 		cur, ok := a.Lane(peer).Get()
 		if !ok || cur != lane {

@@ -17,11 +17,11 @@ func TestEpochIsClosed(t *testing.T) {
 	ep1 := NewEpoch(1, OpenRoadRange(), time.Time{},
 		utils.OrPanic1(NewCommittee(map[PublicKey]uint64{a: 1, c: 1})), 0)
 
-	stay := NewLaneID(a, 0)
-	leave := NewLaneID(b, 0)
-	joiner := NewLaneID(c, 1)
+	stay := LaneID{Validator: a, Joined: 0}
+	leave := LaneID{Validator: b, Joined: 0}
+	joiner := LaneID{Validator: c, Joined: 1}
 	// joined == tip: not closed (live dispose uses Joined < tip).
-	sameEpochAbsent := NewLaneID(GenSecretKey(rng).Public(), 1)
+	sameEpochAbsent := LaneID{Validator: GenSecretKey(rng).Public(), Joined: 1}
 
 	require.False(t, ep1.IsClosed(stay))
 	require.True(t, ep1.IsClosed(leave))

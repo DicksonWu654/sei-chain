@@ -50,9 +50,12 @@ func (e *Epoch) FirstTimestamp() time.Time     { return e.firstTimestamp }
 func (e *Epoch) Committee() *Committee         { return e.committee }
 func (e *Epoch) FirstBlock() GlobalBlockNumber { return e.firstBlock }
 
-// IsClosed reports whether lane is closed as of this epoch: Joined is strictly
-// before this epoch and the lane is absent from this committee. Joiners at or
-// after this epoch are not closed. Avail uses tipEpoch.IsClosed for leave dispose.
+// IsClosed reports whether lane's membership streak has ended as of this epoch:
+// Joined is strictly before this epoch and the lane is absent from this committee.
+// Joiners at or after this epoch are not closed.
+//
+// Avail calls this on epochOfFirst (epoch of the first retained CommitQC) to
+// decide when to drop a lane's in-memory maps and delete its on-disk block WAL.
 func (e *Epoch) IsClosed(lane LaneID) bool {
 	return lane.Joined < e.epochIndex && !e.committee.HasLane(lane)
 }

@@ -16,17 +16,13 @@ import (
 // Joined is the epoch in which that streak began.
 //
 // Identity rules: stay keeps the same LaneID; leave ends that identity; rejoin
-// allocates a new LaneID (typically with tip 0). Avail map retention and tipEpoch
-// dispose live in package avail (see its package doc).
+// allocates a new LaneID (typically with tip 0). When avail drops maps for a
+// closed LaneID is documented in package avail.
 //
 // LaneID is a plain value type (passed by value); fields are public by design.
 type LaneID struct {
 	Validator PublicKey
 	Joined    EpochIndex
-}
-
-func NewLaneID(validator PublicKey, joined EpochIndex) LaneID {
-	return LaneID{Validator: validator, Joined: joined}
 }
 
 // Compare orders by validator, then joined.
@@ -56,7 +52,7 @@ func LaneIDFromBytes(b []byte) (LaneID, error) {
 	if err != nil {
 		return LaneID{}, fmt.Errorf("LaneID validator: %w", err)
 	}
-	return NewLaneID(validator, joined), nil
+	return LaneID{Validator: validator, Joined: joined}, nil
 }
 
 func (l LaneID) String() string {
@@ -80,6 +76,6 @@ var LaneIDConv = protoutils.Conv[LaneID, *pb.LaneID]{
 		if p.Joined == nil {
 			return LaneID{}, fmt.Errorf("joined: missing")
 		}
-		return NewLaneID(validator, EpochIndex(*p.Joined)), nil
+		return LaneID{Validator: validator, Joined: EpochIndex(*p.Joined)}, nil
 	},
 }

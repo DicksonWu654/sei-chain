@@ -11,11 +11,10 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-// Lane maps: joiners at ApplyEpoch; leavers until tipEpoch dispose (package doc).
-// Restart re-attaches leave WALs; tip-stale ones are skipped (tipcut).
+// inner holds CommitQC/AppQC queues and per-LaneID block/vote maps.
 type inner struct {
-	// epoch is the epoch of the next CommitQC. ApplyEpoch advances it.
-	// It is not Registry.LatestEpoch: activation may be ahead of the next QC.
+	// epoch is the *Epoch for the next CommitQC (ApplyEpoch stores it).
+	// Distinct from Registry.LatestEpoch, which may already be further ahead.
 	epoch          utils.AtomicSend[*types.Epoch]
 	latestAppQC    utils.Option[*types.AppQC]
 	latestCommitQC utils.AtomicSend[utils.Option[*types.CommitQC]]
@@ -60,20 +59,19 @@ type loadedAvailState struct {
 	blocks      map[types.LaneID][]persist.LoadedBlock
 }
 
-// newInner seeds lane maps from nextCommitQCEpoch's committee (the epoch of the
-// next CommitQC), then re-attaches leave WALs from loaded that are still needed.
-// nextCommitQCEpoch is not Registry.LatestEpoch — activation may be ahead.
+// newInner builds in-memory state for nextCommitQCEpoch (epoch of the next CommitQC)
+// and loads persisted lane block WALs that are still open as of the prune anchor.
+// Closed-lane WALs are skipped here; SyncLanes deletes those dirs later.
 func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
-	ep := nextCommitQCEpoch
 	votes := map[types.LaneID]*queue[types.BlockNumber, blockVotes]{}
 	blocks := map[types.LaneID]*queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]{}
-	for lane := range ep.Committee().Lanes().All() {
+	for lane := range nextCommitQCEpoch.Committee().Lanes().All() {
 		votes[lane] = newQueue[types.BlockNumber, blockVotes]()
 		blocks[lane] = newQueue[types.BlockNumber, *types.Signed[*types.LaneProposal]]()
 	}
 
 	i := &inner{
-		epoch:               utils.NewAtomicSend(ep),
+		epoch:               utils.NewAtomicSend(nextCommitQCEpoch),
 		latestAppQC:         utils.None[*types.AppQC](),
 		latestCommitQC:      utils.NewAtomicSend(utils.None[*types.CommitQC]()),
 		appVotes:            newQueue[types.GlobalBlockNumber, appVotes](),
@@ -83,29 +81,27 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 		nextBlockToPersist:  make(map[types.LaneID]types.BlockNumber, len(votes)),
 		persistedBlockStart: make(map[types.LaneID]types.BlockNumber, len(votes)),
 	}
-	i.appVotes.prune(ep.FirstBlock())
+	i.appVotes.prune(nextCommitQCEpoch.FirstBlock())
 
 	l, ok := loaded.Get()
 	if !ok {
 		return i, nil
 	}
 
-	// Re-attach persisted WALs before prune. Skip tip-stale leave WALs already
-	// disposable at the prune anchor. Live dispose uses joined < tip; restart
-	// tipcut skip uses joined <= tip because a leave tip may be unnamed in the
-	// tipcut proposal while still disposable. Those LaneIDs never rejoin.
-	var anchorEpoch types.EpochIndex
-	var anchorCommittee *types.Committee
+	// Ensure maps for every persisted lane WAL that is not closed as of the
+	// prune-anchor epoch, then apply the anchor so queues sit at the right
+	// tips before pushBack. Extra maps (not in nextCommitQCEpoch) are fine:
+	// dropLanes + SyncLanes remove them once epochOfFirst.IsClosed.
+	anchorEp := utils.None[*types.Epoch]()
 	if anchor, ok := l.pruneAnchor.Get(); ok {
-		anchorEpoch = anchor.CommitQC.Proposal().EpochIndex()
-		anchorEp, ok := registry.EpochByIndex(anchorEpoch)
+		ep, ok := registry.EpochByIndex(anchor.CommitQC.Proposal().EpochIndex())
 		if !ok {
-			return nil, fmt.Errorf("unknown epoch_index %d for prune anchor", anchorEpoch)
+			return nil, fmt.Errorf("unknown epoch_index %d for prune anchor", anchor.CommitQC.Proposal().EpochIndex())
 		}
-		anchorCommittee = anchorEp.Committee()
+		anchorEp = utils.Some(ep)
 	}
 	for lane := range l.blocks {
-		if anchorCommittee != nil && lane.Joined <= anchorEpoch && !anchorCommittee.HasLane(lane) {
+		if ep, ok := anchorEp.Get(); ok && ep.IsClosed(lane) {
 			continue
 		}
 		if _, ok := i.blocks[lane]; ok {
@@ -125,7 +121,8 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 			slog.Uint64("roadIndex", uint64(anchor.AppQC.Proposal().RoadIndex())),
 			slog.Uint64("globalNumber", uint64(anchor.AppQC.Proposal().GlobalNumber())),
 		)
-		if _, err := i.prune(anchorCommittee, anchor.AppQC, anchor.CommitQC); err != nil {
+		ep := anchorEp.OrPanic("prune anchor epoch")
+		if _, err := i.prune(ep.Committee(), anchor.AppQC, anchor.CommitQC); err != nil {
 			return nil, fmt.Errorf("prune: %w", err)
 		}
 		for lane := range i.blocks {
@@ -148,9 +145,8 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 		i.latestCommitQC.Store(utils.Some(i.commitQCs.q[i.commitQCs.next-1]))
 	}
 
-	// Restore persisted blocks for re-attached lanes. Gaps / bad parent / over-cap → error.
-	// No head-gap skip: WAL must start at q.next. No-anchor mid-WAL is unsupported
-	// (rare; first AppQC forms quickly). Tip-stale leave WALs are tipcut-skipped above.
+	// Load persisted blocks into the maps prepared above. Gaps / bad parent / over-cap → error.
+	// WAL must start at q.next (no head-gap skip). Lanes skipped above are not loaded.
 	for lane, bs := range l.blocks {
 		q, ok := i.blocks[lane]
 		if !ok || len(bs) == 0 {
@@ -193,7 +189,7 @@ func (i *inner) addCommitteeLanes(c *types.Committee) {
 	}
 }
 
-// dropLanes removes block/vote maps for the given LaneIDs (tipEpoch leave prune).
+// dropLanes removes block/vote maps for the given LaneIDs.
 func (i *inner) dropLanes(lanes []types.LaneID) int {
 	n := 0
 	for _, lane := range lanes {

@@ -9,14 +9,12 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-// SubscribeLaneProposals binds the given lane (must be this node's key). After leave,
-// serves the leave map until tipEpoch prune → ErrLanePruned; rejoin needs a new Subscribe
-// with the new LaneID.
+// SubscribeLaneProposals binds the given lane (must be this node's validator key).
+// Recv returns ErrLanePruned once that lane's maps are dropped (epochOfFirst.IsClosed).
+// Rejoin needs a new Subscribe with the new LaneID.
 //
-// Back-leash (AppQC in prior epoch before ActivateEpoch) means tipEpoch prune
-// drops the leave map before rejoin, so Recv ends before a new LaneID is Some.
-// Rejoin is at least one epoch after leave, so a live stream on the leave map
-// is not expected to overlap production on the new LaneID.
+// When AppQC (and thus epochOfFirst) advances into a later epoch before
+// ActivateEpoch installs a rejoin LaneID, Recv ends on the old identity first.
 func (s *State) SubscribeLaneProposals(lane types.LaneID, first types.BlockNumber) (*LaneProposalsRecv, error) {
 	if lane.Validator != s.key.Public() {
 		return nil, ErrBadLane
@@ -35,7 +33,7 @@ func (r *LaneProposalsRecv) Recv(ctx context.Context) (*types.Signed[*types.Lane
 		b, err := r.state.Block(ctx, r.lane, r.next)
 		if err != nil {
 			if errors.Is(err, types.ErrPruned) {
-				// Number prune advances; leave dispose also returns ErrPruned.
+				// Height prune advances next; a dropped map means the lane is closed.
 				for inner := range r.state.inner.Lock() {
 					if _, ok := inner.blocks[r.lane]; !ok {
 						return nil, ErrLanePruned

@@ -505,7 +505,7 @@ func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
 	a, b := keys[0], keys[1]
 	availState := env.consensus.Avail()
 
-	lane0 := types.NewLaneID(a.Public(), 0)
+	lane0 := types.LaneID{Validator: a.Public(), Joined: 0}
 	require.Equal(t, lane0, availState.LocalLane().OrPanic("genesis"))
 
 	if err := scope.Run(ctx, func(ctx context.Context, s scope.Scope) error {
@@ -534,9 +534,7 @@ func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
 			return err
 		}
 		availState.ApplyEpoch(epLeave)
-		if _, err := availState.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
-			return !opt.IsPresent()
-		}); err != nil {
+		if err := availState.WaitMustStop(ctx, lane0); err != nil {
 			return err
 		}
 
@@ -557,16 +555,9 @@ func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
 			return err
 		}
 		availState.ApplyEpoch(epJoin)
-		lane2, err := availState.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
-			got, ok := opt.Get()
-			return ok && got != lane0
-		})
+		got, err := availState.WaitLane(ctx, a.Public(), utils.Some(lane0))
 		if err != nil {
 			return err
-		}
-		got, ok := lane2.Get()
-		if !ok {
-			return fmt.Errorf("expected rejoined LocalLane")
 		}
 		if _, err = availState.Block(ctx, got, 0); err != nil {
 			return err

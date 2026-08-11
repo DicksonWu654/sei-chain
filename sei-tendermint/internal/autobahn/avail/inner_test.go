@@ -179,7 +179,7 @@ func TestNewInnerLoadedBlocksUnknownLane(t *testing.T) {
 	registry, keys := epoch.GenRegistry(rng, 4)
 
 	unknownKey := types.GenSecretKey(rng)
-	unknownLane := types.NewLaneID(unknownKey.Public(), 0)
+	unknownLane := types.LaneID{Validator: unknownKey.Public(), Joined: 0}
 
 	b := testSignedBlock(unknownKey, unknownLane, 0, types.BlockHeaderHash{}, rng)
 	loaded := &loadedAvailState{
@@ -845,8 +845,8 @@ func TestNewInnerPruneAnchorCommitQCUsedForPrune(t *testing.T) {
 	require.Equal(t, types.RoadIndex(3), i.commitQCs.next)
 }
 
-// Leave-lane WALs are re-attached on restart even when the next CommitQC epoch
-// omits them (kept until tipEpoch prune while the node is running).
+// On restart, block WALs are loaded for lanes still open as of the prune anchor
+// even when they are absent from the next CommitQC epoch.
 func TestNewInnerRestoresLeaveLaneWAL(t *testing.T) {
 	rng := utils.TestRng()
 	registry, keys := epoch.GenRegistry(rng, 3)
@@ -876,7 +876,7 @@ func TestNewInnerRestoresLeaveLaneWAL(t *testing.T) {
 	require.Contains(t, i.votes, laneB)
 }
 
-// Anchor at epoch N that still names a leave lane: restore and position via prune.
+// Prune-anchor epoch still has the closing lane: load WAL and position via prune.
 func TestNewInnerRestoresLeaveLaneNamedByAnchor(t *testing.T) {
 	rng := utils.TestRng()
 	registry, keys := epoch.GenRegistry(rng, 3)
@@ -906,7 +906,7 @@ func TestNewInnerRestoresLeaveLaneNamedByAnchor(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Next CommitQC is still in ep0 (tip QC epoch); leave B is re-attached for tip.
+	// Next CommitQC is still in ep0; B is closing and must be loaded for that window.
 	i, err := newInner(ep0, registry, utils.Some(loaded))
 	require.NoError(t, err)
 	require.Contains(t, i.blocks, laneB)

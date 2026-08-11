@@ -173,7 +173,7 @@ func (lw *laneWAL) close() error {
 // MaybePruneAndPersistLane holds the per-lane lock for the entire
 // truncate-then-append sequence, so concurrent calls on the same lane
 // serialize correctly. Different lanes are fully parallel.
-// Lanes may be removed via SyncLanes/DeleteLane once tipEpoch omits them.
+// Lanes may be removed via SyncLanes/DeleteLane once epochOfFirst.IsClosed.
 type BlockPersister struct {
 	dir   utils.Option[string] // immutable after construction
 	lanes utils.RWMutex[map[types.LaneID]*laneWAL]

@@ -1,27 +1,23 @@
 // Package avail is the Data Availability Plane and Ordered Event Log: lane
 // blocks, CommitQC/AppQC buffers, and pruning.
 //
-// Lane map lifecycle (CON-358; production ApplyEpoch wiring is #3736).
-// Identity rules (stay / leave / rejoin) are on types.LaneID.
+// LaneID stay / leave / rejoin rules live on types.LaneID. Production ApplyEpoch
+// wiring is #3736.
 //
-// Two CommitQC epochs matter:
-//   - tipEpoch: epoch of the first retained CommitQC — retires leave maps
-//     (tipEpoch.IsClosed → drop + SyncLanes).
-//   - latestCommitEpoch: epoch of latestCommitQC (else inner.epoch before any QC)
-//     — admits block/vote ingest for that committee's lanes (and retained leave
-//     maps until tip retires them). A missing map is never waited on: ApplyEpoch
-//     installs maps before ingest; absence means pruned or not yet/no longer admitted.
+// Each LaneID may have in-memory block/vote maps and an on-disk block WAL:
+//   - active: in the next-CommitQC committee (maps ensured at ApplyEpoch)
+//   - closing: left that committee, but not yet closed at epochOfFirst
+//     (epoch of the first retained CommitQC); maps and WAL are kept
+//   - closed: epochOfFirst.IsClosed — maps dropped, SyncLanes deletes the WAL
 //
-// Maps (inner.blocks / votes / cursors):
-//   - Join/stay: ensured at ApplyEpoch (addCommitteeLanes, then Store epoch).
-//   - Leave: maps remain until tipEpoch.IsClosed, then map drop + SyncLanes.
+// Block/vote ingest uses the latest CommitQC's committee (or inner.epoch before
+// any QC), and still serves closing lanes. A missing map is never waited on.
 //
-// SubscribeLaneProposals binds an explicit LaneID (must be this node's key) and
-// serves leave maps until dispose → ErrLanePruned. Produce sessions use
-// WaitForLocalLane / WaitMustStop (same LaneID stay does not end the session).
+// SubscribeLaneProposals binds one LaneID and returns ErrLanePruned once that
+// lane is closed. Produce sessions use WaitForLocalLane / WaitMustStop.
 //
-// Restart re-attaches leave WALs still needed for tip; SyncLanes deletes WALs
-// already tip-stale at the prune anchor (see tipcut skip in newInner).
+// Restart loads block WALs for lanes that are not closed as of the prune-anchor
+// epoch; SyncLanes deletes any leftover closed-lane WAL dirs.
 package avail
 
 import (
@@ -44,9 +40,9 @@ import (
 // ErrBadLane .
 var ErrBadLane = errors.New("bad lane")
 
-// ErrLanePruned: SubscribeLaneProposals.Recv after the bound leave map is
-// disposed (tipEpoch.IsClosed). Leave alone keeps serving until then; rejoin
-// needs a new Subscribe.
+// ErrLanePruned is returned by SubscribeLaneProposals.Recv when the bound lane's
+// maps have been dropped (epochOfFirst.IsClosed). Rejoin needs a new Subscribe
+// with the new LaneID.
 var ErrLanePruned = errors.New("lane pruned")
 
 const BlocksPerLane = 3 * types.MaxLaneRangeInProposal
@@ -75,7 +71,7 @@ type State struct {
 
 // LocalLane is this node's applied-committee LaneID, if any.
 func (s *State) LocalLane() utils.Option[types.LaneID] {
-	return s.epoch.Load().Committee().Lane(s.key.Public())
+	return s.Lane(s.key.Public())
 }
 
 // Lane is pk's applied-committee LaneID, if any.
@@ -83,35 +79,16 @@ func (s *State) Lane(pk types.PublicKey) utils.Option[types.LaneID] {
 	return s.epoch.Load().Committee().Lane(pk)
 }
 
-// WaitLocalLane waits until pred(LocalLane()). Stay does not satisfy a "changed" pred.
-func (s *State) WaitLocalLane(ctx context.Context, pred func(utils.Option[types.LaneID]) bool) (utils.Option[types.LaneID], error) {
-	pk := s.key.Public()
-	var lane utils.Option[types.LaneID]
-	_, err := s.epoch.Wait(ctx, func(ep *types.Epoch) bool {
-		lane = ep.Committee().Lane(pk)
-		return pred(lane)
-	})
-	if err != nil {
-		return utils.None[types.LaneID](), err
-	}
-	return lane, nil
-}
-
 // WaitForLocalLane waits until LocalLane is Some.
 func (s *State) WaitForLocalLane(ctx context.Context) (types.LaneID, error) {
-	laneOpt, err := s.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
-		return opt.IsPresent()
-	})
-	if err != nil {
-		return types.LaneID{}, err
-	}
-	return laneOpt.OrPanic("present"), nil
+	return s.WaitLane(ctx, s.key.Public(), utils.None[types.LaneID]())
 }
 
 // WaitMustStop waits until LocalLane is None or != lane (produce session stop).
 func (s *State) WaitMustStop(ctx context.Context, lane types.LaneID) error {
-	_, err := s.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
-		got, ok := opt.Get()
+	pk := s.key.Public()
+	_, err := s.epoch.Wait(ctx, func(ep *types.Epoch) bool {
+		got, ok := ep.Committee().Lane(pk).Get()
 		return !ok || got != lane
 	})
 	return err
@@ -119,8 +96,8 @@ func (s *State) WaitMustStop(ctx context.Context, lane types.LaneID) error {
 
 // ApplyEpoch installs the applied committee under the inner lock (joiner maps
 // before Store so waiters never observe the new committee without those maps).
-// Leavers stay until tipEpoch dispose (see package doc). Registry ActivateEpoch
-// is separate; production wiring is #3736.
+// Closing lanes keep their maps until epochOfFirst.IsClosed (see package doc).
+// Registry ActivateEpoch is separate; production wiring is #3736.
 func (s *State) ApplyEpoch(ep *types.Epoch) {
 	for inner, ctrl := range s.inner.Lock() {
 		inner.addCommitteeLanes(ep.Committee())
@@ -129,7 +106,7 @@ func (s *State) ApplyEpoch(ep *types.Epoch) {
 	}
 }
 
-// epochOfFirst is the registry epoch of the first retained CommitQC (tipEpoch).
+// epochOfFirst returns the registry epoch of the first retained CommitQC.
 func epochOfFirst(inner *inner, registry *epoch.Registry) (utils.Option[*types.Epoch], error) {
 	if inner.commitQCs.first >= inner.commitQCs.next {
 		return utils.None[*types.Epoch](), nil
@@ -299,19 +276,19 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		return nil, err
 	}
 
-	// Disk must match in-memory lanes (tipcut skip / crash orphans).
+	// Disk must match in-memory lanes (closed-lane WALs from crash / prune-anchor skip).
 	if err := persist.SyncLanes(pers.blocks, inner.blocks); err != nil {
 		return nil, fmt.Errorf("sync lane WALs to memory set: %w", err)
 	}
 
 	// Truncate WAL entries below the prune anchor that were filtered out by
-	// loadPersistedState. Includes restored leave lanes; SyncLanes deletes
-	// leave WALs once their maps are dropped (tipEpoch.IsClosed).
+	// loadPersistedState. Includes closing lanes still in memory; SyncLanes
+	// deletes WALs once maps are dropped (epochOfFirst.IsClosed).
 	if ls, ok := loaded.Get(); ok {
 		if anchor, ok := ls.pruneAnchor.Get(); ok {
 			c := ep.Committee()
 			for lane := range inner.blocks {
-				// allowCreate only for lanes still in next-CommitQC committee; leave WALs truncate in place.
+				// allowCreate only for active committee lanes; closing-lane WALs truncate in place.
 				if err := pers.blocks.MaybePruneAndPersistLane(lane, c.HasLane(lane), utils.Some(anchor.CommitQC), nil, utils.None[func(*types.Signed[*types.LaneProposal])]()); err != nil {
 					return nil, fmt.Errorf("prune stale block WAL entries: %w", err)
 				}
@@ -571,9 +548,9 @@ func (s *State) Block(ctx context.Context, lane types.LaneID, n types.BlockNumbe
 
 // PushBlock pushes a block to the state.
 // Waits until all previous blocks are available.
-// Missing map (tip-pruned leave, or a LaneID never admitted) is a silent no-op:
+// Missing map (closed lane, or a LaneID never admitted) is a silent no-op:
 // VerifyInWindow already rejects forged lanes, and callers must not tear down
-// peers over a disposed leave map.
+// peers over a closed lane.
 func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LaneProposal]) error {
 	h := p.Msg().Block().Header()
 	if p.Key() != h.Lane().Validator {
@@ -636,7 +613,7 @@ func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LanePropos
 // PushVote pushes a LaneVote to the state.
 // Waits until the lane has enough capacity for the new vote.
 // It does NOT wait for the previous votes.
-// Missing map (tip-pruned leave, or a LaneID never admitted) is a silent no-op,
+// Missing map (closed lane, or a LaneID never admitted) is a silent no-op,
 // same as PushBlock.
 func (s *State) PushVote(ctx context.Context, vote *types.Signed[*types.LaneVote]) error {
 	if _, err := s.data.Registry().VerifyInWindow(func(c *types.Committee) error {
@@ -859,7 +836,7 @@ func (s *State) Run(ctx context.Context) error {
 						lr := qc.QC().LaneRange(lane)
 						q, ok := inner.blocks[lr.Lane()]
 						if !ok {
-							// Leave map gone after AppQC floor (headers already ErrPruned).
+							// Map already dropped for a closed lane (headers already ErrPruned).
 							continue
 						}
 						for n := lr.First(); n < lr.Next(); n++ {
@@ -999,7 +976,8 @@ func (s *State) markCommitQCsPersisted(qc *types.CommitQC) {
 }
 
 // collectPersistBatch waits for new blocks or commitQCs and collects them under lock.
-// TipEpoch-stale leave maps are dropped; blocks keys are the surviving in-memory lanes.
+// Lanes closed as of epochOfFirst are dropped from maps first; blocks keys are
+// then the surviving in-memory lanes.
 func (s *State) collectPersistBatch(
 	ctx context.Context,
 	lastPersistedAppQCNext types.RoadIndex,
@@ -1026,20 +1004,20 @@ func (s *State) collectPersistBatch(
 		}); err != nil {
 			return b, err
 		}
-		tipEpoch, err := epochOfFirst(inner, s.data.Registry())
+		firstEp, err := epochOfFirst(inner, s.data.Registry())
 		if err != nil {
 			return b, err
 		}
-		var staleLeave []types.LaneID
-		if tip, ok := tipEpoch.Get(); ok {
+		var closed []types.LaneID
+		if ep, ok := firstEp.Get(); ok {
 			for lane := range inner.blocks {
-				if tip.IsClosed(lane) {
-					staleLeave = append(staleLeave, lane)
+				if ep.IsClosed(lane) {
+					closed = append(closed, lane)
 				}
 			}
 		}
-		if len(staleLeave) > 0 {
-			if inner.dropLanes(staleLeave) > 0 {
+		if len(closed) > 0 {
+			if inner.dropLanes(closed) > 0 {
 				ctrl.Updated()
 			}
 		}

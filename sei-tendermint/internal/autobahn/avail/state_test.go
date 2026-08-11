@@ -39,7 +39,7 @@ func makeAppVotes(keys []types.SecretKey, proposal *types.AppProposal) []*types.
 // pushPeerLaneBlock admits a block signed by key onto state via PushBlock
 // (foreign keys; production ProduceLocalBlock only signs with the State's key).
 func pushPeerLaneBlock(ctx context.Context, state *State, key types.SecretKey, payload *types.Payload) (*types.Signed[*types.LaneProposal], error) {
-	lane := types.NewLaneID(key.Public(), 0)
+	lane := types.LaneID{Validator: key.Public(), Joined: 0}
 	n := state.NextBlock(lane)
 	var parent types.BlockHeaderHash
 	if n > 0 {
@@ -166,7 +166,7 @@ func testState(t *testing.T, stateDir utils.Option[string]) {
 			want := byLane[types.PayloadHash]{}
 			for range 10 {
 				key := keys[rng.Intn(len(keys))]
-				lane := types.NewLaneID(key.Public(), 0)
+				lane := types.LaneID{Validator: key.Public(), Joined: 0}
 				p := types.GenPayload(rng)
 				want[lane] = append(want[lane], p.Hash())
 				b, err := pushPeerLaneBlock(ctx, state, key, p)
@@ -258,8 +258,8 @@ func testState(t *testing.T, stateDir utils.Option[string]) {
 	}
 }
 
-// ApplyEpoch keeps leave maps until tipEpoch dispose; the same persist tick
-// SyncLanes-deletes the leave WAL.
+// ApplyEpoch keeps closing-lane maps until epochOfFirst.IsClosed; the same
+// persist tick SyncLanes-deletes that lane's WAL.
 func TestApplyEpoch_TipEpochDisposeDeletesLeaveWAL(t *testing.T) {
 	ctx := t.Context()
 	rng := utils.TestRng()
@@ -328,18 +328,18 @@ func TestApplyEpoch_TipEpochDisposeDeletesLeaveWAL(t *testing.T) {
 			return fmt.Errorf("joiner NextBlock: got %d", got)
 		}
 		if ep.Committee().HasLane(laneB) {
-			return fmt.Errorf("ep1 still has leave lane B")
+			return fmt.Errorf("ep1 still has closing lane B")
 		}
 		for inner := range state.inner.Lock() {
 			if _, ok := inner.blocks[laneB]; !ok {
-				return fmt.Errorf("leave maps dropped before tipEpoch")
+				return fmt.Errorf("closing-lane maps dropped before epochOfFirst.IsClosed")
 			}
 		}
 		if _, err := os.Stat(laneBPath); err != nil {
-			return fmt.Errorf("leave WAL gone before tipEpoch: %w", err)
+			return fmt.Errorf("closing-lane WAL gone before epochOfFirst.IsClosed: %w", err)
 		}
 
-		// First retained CommitQC is ep1 → tipEpoch dispose of B (joined 0).
+		// First retained CommitQC is ep1 → epochOfFirst.IsClosed drops B (joined 0).
 		qc := makeCommitQC(ep, []types.SecretKey{a, cKey}, utils.None[*types.CommitQC](), nil, utils.None[*types.AppQC]())
 		if err := state.PushCommitQC(ctx, qc); err != nil {
 			return fmt.Errorf("PushCommitQC: %w", err)
@@ -350,14 +350,14 @@ func TestApplyEpoch_TipEpochDisposeDeletesLeaveWAL(t *testing.T) {
 
 		for inner := range state.inner.Lock() {
 			if _, ok := inner.blocks[laneB]; ok {
-				return fmt.Errorf("leave maps still present after tipEpoch dispose")
+				return fmt.Errorf("maps still present after epochOfFirst.IsClosed")
 			}
 			if _, ok := inner.blocks[laneC]; !ok {
-				return fmt.Errorf("joiner maps missing after tipEpoch dispose")
+				return fmt.Errorf("joiner maps missing after epochOfFirst.IsClosed")
 			}
 		}
 		if _, err := os.Stat(laneBPath); !os.IsNotExist(err) {
-			return fmt.Errorf("leave WAL still on disk: %v", err)
+			return fmt.Errorf("closed-lane WAL still on disk: %v", err)
 		}
 		return nil
 	}))
