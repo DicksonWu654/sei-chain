@@ -11,8 +11,6 @@ import (
 var ErrRemoteClosed = errors.New("remote closed")
 var errClosed = errors.New("closed")
 
-var errRemoteClosed = ErrRemoteClosed // in-package alias
-
 type Stream struct {
 	state *streamState
 	queue *utils.Watch[queue]
@@ -77,7 +75,7 @@ func (s *Stream) Send(ctx context.Context, msg []byte) error {
 			return errClosed
 		}
 		if inner.send.begin == inner.send.end {
-			return errRemoteClosed
+			return ErrRemoteClosed
 		}
 		// We check msg size AFTER waiting because maxMsgSize could be set AFTER we wait.
 		if uint64(len(msg)) > inner.send.maxMsgSize {
@@ -138,7 +136,7 @@ func (s *Stream) Recv(ctx context.Context, freeBuffer bool) ([]byte, error) {
 			return nil, err
 		}
 		if inner.recv.begin == inner.recv.used {
-			return nil, errRemoteClosed
+			return nil, ErrRemoteClosed
 		}
 		i := inner.recv.begin % uint64(len(inner.recv.msgs))
 		msg := inner.recv.msgs[i]

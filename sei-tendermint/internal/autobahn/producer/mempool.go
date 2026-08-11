@@ -113,7 +113,10 @@ func (s *State) EvmTxByHash(hash common.Hash) (tmtypes.Tx, bool) {
 
 // Removes txs from mempool assigned to lane blocks <n.
 func (s *State) pruneMempool(m *mempool, n types.BlockNumber) {
-	for _, ctrl := range s.mempool.Lock() {
+	for inner, ctrl := range s.mempool.Lock() {
+		if cur, ok := inner.m.Get(); !ok || cur != m {
+			return
+		}
 		if n < m.first {
 			return
 		}

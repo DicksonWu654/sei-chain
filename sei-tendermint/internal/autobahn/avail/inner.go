@@ -98,11 +98,11 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 	var anchorCommittee *types.Committee
 	if anchor, ok := l.pruneAnchor.Get(); ok {
 		anchorEpoch = anchor.CommitQC.Proposal().EpochIndex()
-		ep, ok := registry.EpochByIndex(anchorEpoch)
+		anchorEp, ok := registry.EpochByIndex(anchorEpoch)
 		if !ok {
 			return nil, fmt.Errorf("unknown epoch_index %d for prune anchor", anchorEpoch)
 		}
-		anchorCommittee = ep.Committee()
+		anchorCommittee = anchorEp.Committee()
 	}
 	for lane := range l.blocks {
 		if anchorCommittee != nil && lane.Joined <= anchorEpoch && !anchorCommittee.HasLane(lane) {

@@ -571,7 +571,9 @@ func (s *State) Block(ctx context.Context, lane types.LaneID, n types.BlockNumbe
 
 // PushBlock pushes a block to the state.
 // Waits until all previous blocks are available.
-// No-op if the lane map is gone (pruned leave or not admitted).
+// Missing map (tip-pruned leave, or a LaneID never admitted) is a silent no-op:
+// VerifyInWindow already rejects forged lanes, and callers must not tear down
+// peers over a disposed leave map.
 func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LaneProposal]) error {
 	h := p.Msg().Block().Header()
 	if p.Key() != h.Lane().Validator {
@@ -634,7 +636,8 @@ func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LanePropos
 // PushVote pushes a LaneVote to the state.
 // Waits until the lane has enough capacity for the new vote.
 // It does NOT wait for the previous votes.
-// No-op if the lane map is gone (pruned leave or not admitted).
+// Missing map (tip-pruned leave, or a LaneID never admitted) is a silent no-op,
+// same as PushBlock.
 func (s *State) PushVote(ctx context.Context, vote *types.Signed[*types.LaneVote]) error {
 	if _, err := s.data.Registry().VerifyInWindow(func(c *types.Committee) error {
 		if err := vote.Msg().Verify(c); err != nil {
