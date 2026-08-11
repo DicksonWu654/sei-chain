@@ -13,57 +13,54 @@ import (
 )
 
 // LaneID identifies a validator's continuous committee membership streak.
-// e_join is the epoch in which that streak began.
+// Joined is the epoch in which that streak began.
 //
 // Identity rules: stay keeps the same LaneID; leave ends that identity; rejoin
 // allocates a new LaneID (typically with tip 0). Avail map retention and tipEpoch
 // dispose live in package avail (see its package doc).
+//
+// LaneID is a plain value type (passed by value); fields are public by design.
 type LaneID struct {
-	utils.ReadOnly
-	validator PublicKey
-	eJoin     EpochIndex
+	Validator PublicKey
+	Joined    EpochIndex
 }
 
-func NewLaneID(validator PublicKey, eJoin EpochIndex) LaneID {
-	return LaneID{validator: validator, eJoin: eJoin}
+func NewLaneID(validator PublicKey, joined EpochIndex) LaneID {
+	return LaneID{Validator: validator, Joined: joined}
 }
 
-func (l LaneID) Validator() PublicKey { return l.validator }
-
-func (l LaneID) EJoin() EpochIndex { return l.eJoin }
-
-// Compare orders by validator, then e_join.
+// Compare orders by validator, then joined.
 func (l LaneID) Compare(other LaneID) int {
 	return cmp.Or(
-		l.validator.Compare(other.validator),
-		cmp.Compare(l.eJoin, other.eJoin),
+		l.Validator.Compare(other.Validator),
+		cmp.Compare(l.Joined, other.Joined),
 	)
 }
 
-// Bytes returns a stable encoding: pubkey bytes || big-endian e_join.
+// Bytes returns a stable encoding: pubkey bytes || big-endian joined.
 func (l LaneID) Bytes() []byte {
-	vb := l.validator.Bytes()
+	vb := l.Validator.Bytes()
 	b := make([]byte, 0, len(vb)+8)
 	b = append(b, vb...)
-	return binary.BigEndian.AppendUint64(b, uint64(l.eJoin))
+	return binary.BigEndian.AppendUint64(b, uint64(l.Joined))
 }
 
-// LaneIDFromBytes parses Bytes() encoding (exactly ed25519 pubkey || u64be e_join).
+// LaneIDFromBytes parses Bytes() encoding (exactly ed25519 pubkey || u64be joined).
 func LaneIDFromBytes(b []byte) (LaneID, error) {
 	want := ed25519.PublicKeySize + 8
 	if len(b) != want {
 		return LaneID{}, fmt.Errorf("LaneID: got %d bytes, want %d", len(b), want)
 	}
-	eJoin := EpochIndex(binary.BigEndian.Uint64(b[ed25519.PublicKeySize:]))
+	joined := EpochIndex(binary.BigEndian.Uint64(b[ed25519.PublicKeySize:]))
 	validator, err := PublicKeyFromBytes(b[:ed25519.PublicKeySize])
 	if err != nil {
 		return LaneID{}, fmt.Errorf("LaneID validator: %w", err)
 	}
-	return NewLaneID(validator, eJoin), nil
+	return NewLaneID(validator, joined), nil
 }
 
 func (l LaneID) String() string {
-	return fmt.Sprintf("%s@e%d", l.validator.String(), l.eJoin)
+	return fmt.Sprintf("%s@e%d", l.Validator.String(), l.Joined)
 }
 
 func (l LaneID) HexString() string { return hex.EncodeToString(l.Bytes()) }
@@ -71,8 +68,8 @@ func (l LaneID) HexString() string { return hex.EncodeToString(l.Bytes()) }
 var LaneIDConv = protoutils.Conv[LaneID, *pb.LaneID]{
 	Encode: func(l LaneID) *pb.LaneID {
 		return &pb.LaneID{
-			Validator: PublicKeyConv.Encode(l.validator),
-			EJoin:     utils.Alloc(uint64(l.eJoin)),
+			Validator: PublicKeyConv.Encode(l.Validator),
+			Joined:    utils.Alloc(uint64(l.Joined)),
 		}
 	},
 	Decode: func(p *pb.LaneID) (LaneID, error) {
@@ -80,9 +77,9 @@ var LaneIDConv = protoutils.Conv[LaneID, *pb.LaneID]{
 		if err != nil {
 			return LaneID{}, fmt.Errorf("validator: %w", err)
 		}
-		if p.EJoin == nil {
-			return LaneID{}, fmt.Errorf("e_join: missing")
+		if p.Joined == nil {
+			return LaneID{}, fmt.Errorf("joined: missing")
 		}
-		return NewLaneID(validator, EpochIndex(*p.EJoin)), nil
+		return NewLaneID(validator, EpochIndex(*p.Joined)), nil
 	},
 }

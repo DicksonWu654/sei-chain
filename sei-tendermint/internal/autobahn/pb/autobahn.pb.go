@@ -422,11 +422,11 @@ func (x *PublicKey) GetEd25519() []byte {
 }
 
 // LaneID identifies a validator's lane for a continuous committee membership
-// streak. e_join is the epoch in which the validator most recently joined.
+// streak. joined is the epoch in which the validator most recently joined.
 type LaneID struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Validator     *PublicKey             `protobuf:"bytes,1,opt,name=validator,proto3,oneof" json:"validator,omitempty"`       // required
-	EJoin         *uint64                `protobuf:"varint,2,opt,name=e_join,json=eJoin,proto3,oneof" json:"e_join,omitempty"` // required
+	Validator     *PublicKey             `protobuf:"bytes,1,opt,name=validator,proto3,oneof" json:"validator,omitempty"` // required
+	Joined        *uint64                `protobuf:"varint,2,opt,name=joined,proto3,oneof" json:"joined,omitempty"`      // required
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -468,9 +468,9 @@ func (x *LaneID) GetValidator() *PublicKey {
 	return nil
 }
 
-func (x *LaneID) GetEJoin() uint64 {
-	if x != nil && x.EJoin != nil {
-		return *x.EJoin
+func (x *LaneID) GetJoined() uint64 {
+	if x != nil && x.Joined != nil {
+		return *x.Joined
 	}
 	return 0
 }
@@ -2272,13 +2272,13 @@ const file_autobahn_autobahn_proto_rawDesc = "" +
 	"\tPublicKey\x12%\n" +
 	"\aed25519\x18\x01 \x01(\fB\x06؈\xe2\xab\f H\x00R\aed25519\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\n" +
 	"\n" +
-	"\b_ed25519\"\x83\x01\n" +
+	"\b_ed25519\"\x84\x01\n" +
 	"\x06LaneID\x126\n" +
-	"\tvalidator\x18\x01 \x01(\v2\x13.autobahn.PublicKeyH\x00R\tvalidator\x88\x01\x01\x12\x1a\n" +
-	"\x06e_join\x18\x02 \x01(\x04H\x01R\x05eJoin\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\f\n" +
+	"\tvalidator\x18\x01 \x01(\v2\x13.autobahn.PublicKeyH\x00R\tvalidator\x88\x01\x01\x12\x1b\n" +
+	"\x06joined\x18\x02 \x01(\x04H\x01R\x06joined\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\f\n" +
 	"\n" +
 	"_validatorB\t\n" +
-	"\a_e_join\"t\n" +
+	"\a_joined\"t\n" +
 	"\tSignature\x12*\n" +
 	"\x03key\x18\x01 \x01(\v2\x13.autobahn.PublicKeyH\x00R\x03key\x88\x01\x01\x12\x1d\n" +
 	"\x03sig\x18\x02 \x01(\fB\x06؈\xe2\xab\f@H\x01R\x03sig\x88\x01\x01:\fȈ\xe2\xab\f\x01\xe8\x88\xe2\xab\f\x01B\x06\n" +

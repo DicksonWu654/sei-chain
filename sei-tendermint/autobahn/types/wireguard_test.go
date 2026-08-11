@@ -191,7 +191,7 @@ func TestFullProposalWireguardAcceptsMaxValidators(t *testing.T) {
 	rng := utils.TestRng()
 	laneQCs := map[LaneID]*LaneQC{}
 	for lane := range committee.Lanes().All() {
-		key := secretKeyFor(keys, lane.Validator())
+		key := secretKeyFor(keys, lane.Validator)
 		vote := NewLaneVote(NewBlock(lane, 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
 		laneQCs[lane] = NewLaneQC([]*Signed[*LaneVote]{Sign(key, vote)})
 	}

@@ -22,14 +22,13 @@ func (s ImSlice[T]) At(i int) T       { return s.s[i] }
 func (s ImSlice[T]) All() iter.Seq[T] { return slices.Values(s.s) }
 
 // Committee represents the consensus committee.
-// Lanes carry membership (validator + e_join); weights are voting stake.
+// Lanes carry membership (validator + joined); weights are voting stake.
 //
-// Members are totally ordered for Leader/EvmShard lottery and tipcut header
-// concatenation. Replicas order by PublicKey; lanes by LaneID.Compare
-// (validator, then e_join). With one lane per validator those coincide, so
-// walking Lanes() is walking replica order.
+// Membership order is replica order (PublicKey.Compare). Leader/EvmShard and
+// tipcut header concatenation walk that order. Lanes() follows the same order
+// (one LaneID per replica); LaneID.Compare is for sorting lane lists elsewhere.
 type Committee struct {
-	lanes       ImSlice[LaneID] // sorted by LaneID.Compare; one per member
+	lanes       ImSlice[LaneID] // in Replicas() order; one per member
 	byValidator map[PublicKey]LaneID
 	weights     map[PublicKey]uint64
 	totalWeight uint64
@@ -43,8 +42,8 @@ func (c *Committee) HasReplica(k PublicKey) bool {
 }
 
 func (c *Committee) HasLane(l LaneID) bool {
-	got, ok := c.byValidator[l.validator]
-	return ok && got.eJoin == l.eJoin
+	got, ok := c.byValidator[l.Validator]
+	return ok && got.Joined == l.Joined
 }
 
 func (c *Committee) Lane(v PublicKey) utils.Option[LaneID] {
@@ -55,11 +54,22 @@ func (c *Committee) Lane(v PublicKey) utils.Option[LaneID] {
 	return utils.Some(lane)
 }
 
-// Lanes returns members in LaneID order (see Committee).
+// Replicas yields validators in PublicKey order (membership order).
+func (c *Committee) Replicas() iter.Seq[PublicKey] {
+	return func(yield func(PublicKey) bool) {
+		for lane := range c.lanes.All() {
+			if !yield(lane.Validator) {
+				return
+			}
+		}
+	}
+}
+
+// Lanes returns each replica's LaneID in Replicas() order.
 func (c *Committee) Lanes() ImSlice[LaneID] { return c.lanes }
 
 // Deterministic random oracle selecting a replica with probability proportional to the weight.
-// Walks Lanes() so seed → PublicKey is network-wide deterministic (see Committee).
+// Walks membership (Replicas) order so seed → PublicKey is network-wide deterministic.
 func (c *Committee) randomReplica(seed []byte) PublicKey {
 	h := sha256.Sum256(seed[:])
 	var x, total uint256.Int
@@ -67,10 +77,10 @@ func (c *Committee) randomReplica(seed []byte) PublicKey {
 	total.SetUint64(c.totalWeight)
 	y := x.Mod(&x, &total).Uint64()
 	// TODO(gprusak): this can be optimized to O(1) lookup
-	for lane := range c.lanes.All() {
-		w := c.weights[lane.validator]
+	for k := range c.Replicas() {
+		w := c.weights[k]
 		if y < w {
-			return lane.validator
+			return k
 		}
 		y -= w
 	}
@@ -129,7 +139,7 @@ func (c *Committee) LaneQuorum() uint64 {
 	return c.Faulty() + 1
 }
 
-// NewCommittee is genesis: e_join = 0 for every member.
+// NewCommittee is genesis: joined = 0 for every member.
 func NewCommittee(weights map[PublicKey]uint64) (*Committee, error) {
 	weights, totalWeight, err := normalizeWeights(weights)
 	if err != nil {
@@ -139,13 +149,14 @@ func NewCommittee(weights map[PublicKey]uint64) (*Committee, error) {
 	for v := range weights {
 		lanes = append(lanes, NewLaneID(v, 0))
 	}
-	return finalizeCommittee(lanes, weights, totalWeight)
+	return newCommittee(lanes, weights, totalWeight)
 }
 
-// ActivateCommittee for epoch e>0: copy e_join from prev on stay, stamp e on join.
-func ActivateCommittee(prev *Committee, weights map[PublicKey]uint64, e EpochIndex) (*Committee, error) {
+// DeriveNext builds the committee for epoch e>0 from this committee:
+// copy joined on stay, stamp e on join. EpochIndex stays on Epoch, not Committee.
+func (c *Committee) DeriveNext(weights map[PublicKey]uint64, e EpochIndex) (*Committee, error) {
 	if e == 0 {
-		return nil, errors.New("ActivateCommittee: epoch must be > 0")
+		return nil, errors.New("DeriveNext: epoch must be > 0")
 	}
 	weights, totalWeight, err := normalizeWeights(weights)
 	if err != nil {
@@ -153,9 +164,9 @@ func ActivateCommittee(prev *Committee, weights map[PublicKey]uint64, e EpochInd
 	}
 	lanes := make([]LaneID, 0, len(weights))
 	for v := range weights {
-		lanes = append(lanes, prev.Lane(v).Or(NewLaneID(v, e)))
+		lanes = append(lanes, c.Lane(v).Or(NewLaneID(v, e)))
 	}
-	return finalizeCommittee(lanes, weights, totalWeight)
+	return newCommittee(lanes, weights, totalWeight)
 }
 
 // normalizeWeights clones weights, drops zero entries, and returns the filtered
@@ -182,23 +193,27 @@ func normalizeWeights(weights map[PublicKey]uint64) (map[PublicKey]uint64, uint6
 	return weights, totalWeight, nil
 }
 
-// finalizeCommittee sorts lanes and rejects duplicate validators (multiple e_join).
-func finalizeCommittee(lanes []LaneID, weights map[PublicKey]uint64, totalWeight uint64) (*Committee, error) {
-	slices.SortFunc(lanes, LaneID.Compare)
-	for i := 1; i < len(lanes); i++ {
-		if lanes[i].validator == lanes[i-1].validator {
-			return nil, fmt.Errorf(
-				"duplicate validator in committee lanes: %q with e_join %d and %d",
-				lanes[i].validator, lanes[i-1].eJoin, lanes[i].eJoin,
-			)
-		}
-	}
+// newCommittee rejects duplicate validators, orders replicas by PublicKey,
+// and stores lanes in that same order (one LaneID per replica).
+func newCommittee(lanes []LaneID, weights map[PublicKey]uint64, totalWeight uint64) (*Committee, error) {
 	byValidator := make(map[PublicKey]LaneID, len(lanes))
 	for _, lane := range lanes {
-		byValidator[lane.validator] = lane
+		if _, ok := byValidator[lane.Validator]; ok {
+			return nil, fmt.Errorf(
+				"duplicate validator in committee lanes: %q with joined %d and %d",
+				lane.Validator, byValidator[lane.Validator].Joined, lane.Joined,
+			)
+		}
+		byValidator[lane.Validator] = lane
+	}
+	replicas := slices.Collect(maps.Keys(byValidator))
+	slices.SortFunc(replicas, PublicKey.Compare)
+	ordered := make([]LaneID, len(replicas))
+	for i, v := range replicas {
+		ordered[i] = byValidator[v]
 	}
 	return &Committee{
-		lanes:       ImSlice[LaneID]{lanes},
+		lanes:       ImSlice[LaneID]{ordered},
 		byValidator: byValidator,
 		weights:     weights,
 		totalWeight: totalWeight,

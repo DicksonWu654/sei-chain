@@ -86,8 +86,8 @@ func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) 
 	}
 
 	// Re-attach persisted WALs before prune. Skip tip-stale leave WALs already
-	// disposable at the prune anchor. Live dispose uses e_join < tip; restart
-	// tipcut skip uses e_join <= tip because a leave tip may be unnamed in the
+	// disposable at the prune anchor. Live dispose uses joined < tip; restart
+	// tipcut skip uses joined <= tip because a leave tip may be unnamed in the
 	// tipcut proposal while still disposable. Those LaneIDs never rejoin.
 	var anchorEpoch types.EpochIndex
 	var anchorCommittee *types.Committee
@@ -100,7 +100,7 @@ func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) 
 		anchorCommittee = ep.Committee()
 	}
 	for lane := range l.blocks {
-		if anchorCommittee != nil && lane.EJoin() <= anchorEpoch && !anchorCommittee.HasLane(lane) {
+		if anchorCommittee != nil && lane.Joined <= anchorEpoch && !anchorCommittee.HasLane(lane) {
 			continue
 		}
 		if _, ok := i.blocks[lane]; ok {

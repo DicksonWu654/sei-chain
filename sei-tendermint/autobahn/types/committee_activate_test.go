@@ -7,7 +7,7 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils/require"
 )
 
-func TestActivateCommittee_StayLeaveRejoin(t *testing.T) {
+func TestDeriveNext_StayLeaveRejoin(t *testing.T) {
 	rng := utils.TestRng()
 	a := GenSecretKey(rng).Public()
 	b := GenSecretKey(rng).Public()
@@ -31,8 +31,8 @@ func TestActivateCommittee_StayLeaveRejoin(t *testing.T) {
 	require.False(t, c0.HasLane(NewLaneID(c, 0)))
 	requireLanesSorted(t, c0)
 
-	// Epoch 1: A,B,D stay → copy e_join=0.
-	c1, err := ActivateCommittee(c0, map[PublicKey]uint64{a: 1, b: 1, d: 1}, 1)
+	// Epoch 1: A,B,D stay → copy joined=0.
+	c1, err := c0.DeriveNext(map[PublicKey]uint64{a: 1, b: 1, d: 1}, 1)
 	require.NoError(t, err)
 	require.Equal(t, NewLaneID(a, 0), c1.Lane(a).OrPanic("a"))
 	require.Equal(t, NewLaneID(b, 0), c1.Lane(b).OrPanic("b"))
@@ -40,7 +40,7 @@ func TestActivateCommittee_StayLeaveRejoin(t *testing.T) {
 	requireLanesSorted(t, c1)
 
 	// Epoch 2: B,D leave; C joins. A stays.
-	c2, err := ActivateCommittee(c1, map[PublicKey]uint64{a: 1, c: 1}, 2)
+	c2, err := c1.DeriveNext(map[PublicKey]uint64{a: 1, c: 1}, 2)
 	require.NoError(t, err)
 	require.Equal(t, NewLaneID(a, 0), c2.Lane(a).OrPanic("a"))
 	require.Equal(t, NewLaneID(c, 2), c2.Lane(c).OrPanic("c"))
@@ -50,7 +50,7 @@ func TestActivateCommittee_StayLeaveRejoin(t *testing.T) {
 	requireLanesSorted(t, c2)
 
 	// Epoch 3: D rejoins; C and A stay.
-	c3, err := ActivateCommittee(c2, map[PublicKey]uint64{a: 1, c: 1, d: 1}, 3)
+	c3, err := c2.DeriveNext(map[PublicKey]uint64{a: 1, c: 1, d: 1}, 3)
 	require.NoError(t, err)
 	require.Equal(t, NewLaneID(a, 0), c3.Lane(a).OrPanic("a"))
 	require.Equal(t, NewLaneID(c, 2), c3.Lane(c).OrPanic("c"))
@@ -59,10 +59,10 @@ func TestActivateCommittee_StayLeaveRejoin(t *testing.T) {
 	requireLanesSorted(t, c3)
 }
 
-func TestFinalizeCommittee_RejectsDuplicatePubKeyDifferentEJoin(t *testing.T) {
+func TestFinalizeCommittee_RejectsDuplicatePubKeyDifferentJoined(t *testing.T) {
 	rng := utils.TestRng()
 	v := GenSecretKey(rng).Public()
-	_, err := finalizeCommittee(
+	_, err := newCommittee(
 		[]LaneID{NewLaneID(v, 0), NewLaneID(v, 1)},
 		map[PublicKey]uint64{v: 1},
 		1,

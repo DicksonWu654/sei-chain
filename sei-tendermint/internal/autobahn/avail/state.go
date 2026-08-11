@@ -8,7 +8,7 @@
 //   - Join/stay: ensured at ApplyEpoch (addCommitteeLanes, then Store epoch).
 //   - Leave: maps remain until tipEpoch (epoch of the first retained CommitQC)
 //     omits the LaneID, then DeleteLane + map drop on the same persist tick.
-//   - Dispose: e_join < tipEpoch && !tipCommittee.HasLane(lane).
+//   - Dispose: joined < tipEpoch && !tipCommittee.HasLane(lane).
 //
 // Subscribe binds LocalLane at subscribe time and serves leave maps until
 // dispose → ErrLanePruned. Produce sessions use WaitProduce / WaitMustStop
@@ -130,14 +130,14 @@ func tipEpochOf(inner *inner, registry *epoch.Registry) (utils.Option[*types.Epo
 	return utils.Some(ep), nil
 }
 
-// staleLaneDisposable: tipEpoch omits lane and e_join < tip (joiners at/after tip stay).
+// staleLaneDisposable: tipEpoch omits lane and joined < tip (joiners at/after tip stay).
 // None tipEpoch → false.
 func staleLaneDisposable(lane types.LaneID, tipEpoch utils.Option[*types.Epoch]) bool {
 	ep, ok := tipEpoch.Get()
 	if !ok {
 		return false
 	}
-	return lane.EJoin() < ep.EpochIndex() && !ep.Committee().HasLane(lane)
+	return lane.Joined < ep.EpochIndex() && !ep.Committee().HasLane(lane)
 }
 
 // deleteStaleLaneWAL Deletes WALs for tip-stale leave maps.
@@ -594,7 +594,7 @@ func (s *State) Block(ctx context.Context, lane types.LaneID, n types.BlockNumbe
 // Returns ErrBadLane if tipEpoch drop removes the lane map while waiting.
 func (s *State) PushBlock(ctx context.Context, p *types.Signed[*types.LaneProposal]) error {
 	h := p.Msg().Block().Header()
-	if p.Key() != h.Lane().Validator() {
+	if p.Key() != h.Lane().Validator {
 		return fmt.Errorf("signer %v does not match lane %v", p.Key(), h.Lane())
 	}
 	if _, err := s.data.Registry().VerifyInWindow(func(c *types.Committee) error {
@@ -813,7 +813,7 @@ func (s *State) WaitForLaneQCs(
 
 // ProduceLocalBlock appends block n on the WaitProduce session lane.
 func (s *State) ProduceLocalBlock(lane types.LaneID, n types.BlockNumber, payload *types.Payload) (*types.Signed[*types.LaneProposal], error) {
-	if s.key.Public() != lane.Validator() {
+	if s.key.Public() != lane.Validator {
 		return nil, ErrBadLane
 	}
 	var result *types.Signed[*types.LaneProposal]

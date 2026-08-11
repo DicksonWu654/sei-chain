@@ -63,12 +63,12 @@ message PublicKey {
 }
 
 // LaneID identifies a validator's lane for a continuous committee membership
-// streak. e_join is the epoch in which the validator most recently joined.
+// streak. joined is the epoch in which the validator most recently joined.
 message LaneID {
   option (hashable.hashable) = true;
   option (wireguard.sized) = true;
   optional PublicKey validator = 1; // required
-  optional uint64 e_join = 2; // required
+  optional uint64 joined = 2; // required
 }
 
 message Signature {

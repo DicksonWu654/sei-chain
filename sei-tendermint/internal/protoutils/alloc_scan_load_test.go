@@ -29,7 +29,7 @@ func maxBlock() *autopb.Block {
 		Header: &autopb.BlockHeader{
 			LaneId: &autopb.LaneID{
 				Validator: &autopb.PublicKey{Ed25519: make([]byte, 32)},
-				EJoin:     proto.Uint64(0),
+				Joined:    proto.Uint64(0),
 			},
 			BlockNumber: proto.Uint64(1),
 			ParentHash:  make([]byte, 32),

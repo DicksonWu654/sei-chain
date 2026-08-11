@@ -408,7 +408,7 @@ func TestStateMismatchedQCs(t *testing.T) {
 	}
 
 	// 1. Produce a block so we have a non-empty range
-	lane := types.NewLaneID(keys[0].Public(), 0)
+	lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 	p := types.GenPayload(rng)
 	b, err := state.ProduceLocalBlock(lane, state.NextBlock(lane), p)
 	require.NoError(t, err)
@@ -444,7 +444,7 @@ func TestPushBlockRejectsBadParentHash(t *testing.T) {
 	state := utils.OrPanic1(NewState(keys[0], ds, utils.Some(t.TempDir())))
 
 	// Produce a valid first block on our lane.
-	lane := types.NewLaneID(keys[0].Public(), 0)
+	lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 	_, err := state.ProduceLocalBlock(lane, state.NextBlock(lane), types.GenPayload(rng))
 	require.NoError(t, err)
 
@@ -467,7 +467,7 @@ func TestPushBlockRejectsWrongSigner(t *testing.T) {
 	state := utils.OrPanic1(NewState(keys[0], ds, utils.Some(t.TempDir())))
 
 	// Create a block on keys[0]'s lane but sign it with keys[1].
-	lane := types.NewLaneID(keys[0].Public(), 0)
+	lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 	block := types.NewBlock(lane, 0, types.GenBlockHeaderHash(rng), types.GenPayload(rng))
 	prop := types.Sign(keys[1], types.NewLaneProposal(block))
 
@@ -540,7 +540,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 	t.Run("loads persisted blocks", func(t *testing.T) {
 		dir := t.TempDir()
 		ds := newTestDataState(&data.Config{Registry: registry})
-		lane := types.NewLaneID(keys[0].Public(), 0)
+		lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 
 		// Persist blocks using BlockPersister.
 		bp, _, err := persist.NewBlockPersister(utils.Some(dir))
@@ -567,7 +567,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 	t.Run("loads persisted AppQC and blocks together", func(t *testing.T) {
 		dir := t.TempDir()
 		ds := newTestDataState(&data.Config{Registry: registry})
-		lane := types.NewLaneID(keys[0].Public(), 0)
+		lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 
 		roadIdx := types.RoadIndex(2)
 		globalNum := types.GlobalBlockNumber(5)
@@ -771,7 +771,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 	t.Run("anchor past all persisted blocks truncates lane WAL", func(t *testing.T) {
 		dir := t.TempDir()
 		ds := newTestDataState(&data.Config{Registry: registry})
-		lane := types.NewLaneID(keys[0].Public(), 0)
+		lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 
 		// Persist commitQCs 0-9 and blocks 0-2 for one lane.
 		qcs := make([]*types.CommitQC, 10)
@@ -843,7 +843,7 @@ func TestNewStateWithPersistence(t *testing.T) {
 	t.Run("failed NewState releases WAL locks", func(t *testing.T) {
 		dir := t.TempDir()
 		ds := newTestDataState(&data.Config{Registry: registry})
-		lane := types.NewLaneID(keys[0].Public(), 0)
+		lane := registry.LatestEpoch().Committee().Lane(keys[0].Public()).OrPanic("keys[0]")
 
 		// Seed one lane so the failing NewState below has a lane WAL to leak, then release the seeder.
 		bp, _, err := persist.NewBlockPersister(utils.Some(dir))
