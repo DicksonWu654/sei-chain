@@ -1,9 +1,31 @@
-// Package seicfg holds a seid node's configuration as one resolved value.
+// Package seicfg holds a seid node's configuration as one materialized value.
 //
 // A node's configuration reaches running code through two channels: a Tendermint config
 // struct and a flat key-value map that callers index by string and cast at the read site.
-// Config carries both, so a caller takes one value rather than two, and so a second resolver
-// can be held against the legacy one by comparing values of a single type.
+// Config carries both, so a caller takes one value rather than two, and so a second
+// implementation can be held against the legacy one by comparing values of a single type.
+//
+// Four roles divide the work of getting a value from a file to a reader. Naming them here
+// reserves the vocabulary, because only the last one exists today.
+//
+//	Provider  a configuration source, read into one layer of raw values. One per source:
+//	          in-code defaults, a TOML file, the environment, cobra flags.
+//	Resolve   the layers reduced to a Config, applying precedence and defaults once. This
+//	          is the step the legacy path never named, which is why precedence there is an
+//	          emergent property of which viper instance a caller asked rather than a
+//	          declared order.
+//	View      a FlatView projected off a Config, for reads that still index by string.
+//	          The direction is load-bearing: a Config produces a view, never the reverse.
+//	          Reversed, Config inherits the untyped map's ambiguity and is a wrapper
+//	          rather than a seam.
+//	Adapt     the legacy path treated as one opaque Provider and Resolve, its output
+//	          wrapped so it satisfies this package's type. AdaptLegacy below.
+//
+// Provider, Resolve and View are not implemented. A second implementation needs View
+// first, because it has no viper to hand through and every unmigrated read goes through
+// the flat view. Whether View derives from the schema, which cannot serve a key with no
+// field, or is backed by a viper the implementation builds for the migration window, is
+// open.
 package seicfg
 
 import (
@@ -63,23 +85,24 @@ type Resolved struct {
 	Flat FlatView
 }
 
-// FromLegacy assembles what the legacy interception handler resolved.
+// AdaptLegacy wraps what the legacy interception handler resolved.
 //
 // It only gathers what its caller already holds, so it cannot resolve differently from the
 // handler that produced its arguments. That is what makes introducing this type a change in
-// shape rather than in behaviour.
-func FromLegacy(app serverconfig.Config, tendermint *tmcfg.Config, flat FlatView) Resolved {
+// shape rather than in behaviour. It resolves nothing itself, which is why it is an adapter
+// over the legacy path rather than one generation of a resolver.
+func AdaptLegacy(app serverconfig.Config, tendermint *tmcfg.Config, flat FlatView) Resolved {
 	return Resolved{
 		Config: Config{App: app, Tendermint: tendermint, appResolved: true},
 		Flat:   flat,
 	}
 }
 
-// WithoutAppConfig assembles a Resolved for a caller holding no app.toml surface.
+// AdaptLegacyWithoutApp wraps a legacy caller that holds no app.toml surface.
 //
 // The rollback command is the only one, and it holds no Tendermint config either. Its tests
 // run with a nil viper as well, so resolving the app.toml surface here would panic rather
 // than degrade. Config.App is the zero value and Config.AppResolved reports false.
-func WithoutAppConfig(flat FlatView) Resolved {
+func AdaptLegacyWithoutApp(flat FlatView) Resolved {
 	return Resolved{Flat: flat}
 }

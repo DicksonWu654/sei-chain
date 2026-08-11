@@ -311,7 +311,7 @@ func startInProcess(
 			"This defaults to 0 in the current version, but will error in the next version " +
 			"(SDK v0.45). Please explicitly put the desired minimum-gas-prices in your app.toml.")
 	}
-	app := appCreator(nil, traceWriter, seicfg.FromLegacy(config, ctx.Config, ctx.Viper))
+	app := appCreator(nil, traceWriter, seicfg.AdaptLegacy(config, ctx.Config, ctx.Viper))
 	defer func() {
 		logger.Info("close any other open resource...")
 		if err := app.Close(); err != nil {

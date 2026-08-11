@@ -53,7 +53,7 @@ restarting Tendermint the node will re-fetch and re-execute the transactions in 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := GetServerContextFromCmd(cmd)
 
-			app := appCreator(nil, nil, seicfg.WithoutAppConfig(ctx.Viper))
+			app := appCreator(nil, nil, seicfg.AdaptLegacyWithoutApp(ctx.Viper))
 
 			// Get initial app state
 			lastCommit := app.CommitMultiStore().LastCommitID()

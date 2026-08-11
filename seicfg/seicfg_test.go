@@ -39,10 +39,10 @@ func newFlatView() *viper.Viper {
 func TestFlatIsTheValueItWasGiven(t *testing.T) {
 	flat := newFlatView()
 
-	got := seicfg.FromLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), flat)
+	got := seicfg.AdaptLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), flat)
 
 	if got.Flat != seicfg.FlatView(flat) {
-		t.Fatalf("Flat is %#v rather than the value FromLegacy was given. Every read that has not "+
+		t.Fatalf("Flat is %#v rather than the value AdaptLegacy was given. Every read that has not "+
 			"moved onto a Config field goes through it, so a Resolved that rebuilds or copies it "+
 			"resolves those reads against something the legacy handler never produced", got.Flat)
 	}
@@ -53,7 +53,7 @@ func TestFlatIsTheValueItWasGiven(t *testing.T) {
 func TestFlatResolvesEveryKeyTheSameWay(t *testing.T) {
 	flat := newFlatView()
 
-	resolved := seicfg.FromLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), flat)
+	resolved := seicfg.AdaptLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), flat)
 
 	for _, key := range flat.AllKeys() {
 		want, got := flat.Get(key), resolved.Flat.Get(key)
@@ -76,7 +76,7 @@ func TestFlatResolvesEveryKeyTheSameWay(t *testing.T) {
 func TestFlatViewSatisfiesAppOptions(t *testing.T) {
 	flat := newFlatView()
 
-	var opts servertypes.AppOptions = seicfg.FromLegacy(
+	var opts servertypes.AppOptions = seicfg.AdaptLegacy(
 		*serverconfig.DefaultConfig(), config.DefaultConfig(), flat).Flat
 
 	if opts.Get(server.FlagMinRetainBlocks) != flat.Get(server.FlagMinRetainBlocks) {
@@ -93,10 +93,10 @@ func TestConfigComparesEqualAcrossProducers(t *testing.T) {
 	app, tm := *serverconfig.DefaultConfig(), config.DefaultConfig()
 
 	// A legacy-shaped producer, carrying a viper.
-	legacy := seicfg.FromLegacy(app, tm, newFlatView())
+	legacy := seicfg.AdaptLegacy(app, tm, newFlatView())
 	// A producer that resolved the same values without building a flat view, which is what a
 	// resolver that has stopped using viper looks like.
-	direct := seicfg.FromLegacy(app, tm, nil)
+	direct := seicfg.AdaptLegacy(app, tm, nil)
 
 	if !reflect.DeepEqual(legacy.Config, direct.Config) {
 		t.Fatalf("two producers agreeing on every value produced Configs that differ. The "+
@@ -105,7 +105,7 @@ func TestConfigComparesEqualAcrossProducers(t *testing.T) {
 			legacy.Config, direct.Config)
 	}
 	// And the reverse, so the assertion above is not passing because Config carries nothing.
-	changed := seicfg.FromLegacy(app, tm, nil)
+	changed := seicfg.AdaptLegacy(app, tm, nil)
 	changed.Config.App.Pruning = "custom"
 	if reflect.DeepEqual(legacy.Config, changed.Config) {
 		t.Fatal("Configs differing in a resolved value compared equal, so the comparison above " +
@@ -116,7 +116,7 @@ func TestConfigComparesEqualAcrossProducers(t *testing.T) {
 	// the compared value rather than machinery. This is the one intended inequality: it separates
 	// a producer that resolved app.toml from one that never had it, which is not the same as two
 	// resolvers disagreeing. Both sides of a v2 differential resolve app.toml, so both carry true.
-	if reflect.DeepEqual(legacy.Config, seicfg.WithoutAppConfig(nil).Config) {
+	if reflect.DeepEqual(legacy.Config, seicfg.AdaptLegacyWithoutApp(nil).Config) {
 		t.Fatal("a Config with a resolved app.toml surface compared equal to one without. The two " +
 			"describe different nodes, so a differential holding them equal would pass a resolver " +
 			"that had silently stopped reading app.toml at all")
@@ -160,35 +160,35 @@ func TestInterBlockCacheStructFieldAgreesWithTheFlatRead(t *testing.T) {
 	}
 }
 
-// TestWithoutAppConfigReportsAnUnresolvedApp pins the state that blocks read migration.
+// TestAdaptLegacyWithoutAppReportsAnUnresolvedApp pins the state that blocks read migration.
 //
 // The rollback command builds an app with no app.toml surface and no Tendermint config, and its
 // tests supply no viper either. A read moved onto an App field would resolve to that field's zero
 // value there rather than to what the operator set, so the state is named instead of implied.
-func TestWithoutAppConfigReportsAnUnresolvedApp(t *testing.T) {
+func TestAdaptLegacyWithoutAppReportsAnUnresolvedApp(t *testing.T) {
 	flat := newFlatView()
 
-	got := seicfg.WithoutAppConfig(flat)
+	got := seicfg.AdaptLegacyWithoutApp(flat)
 
 	if got.Config.AppResolved() {
-		t.Error("WithoutAppConfig reports a resolved app.toml surface. It has none, and a read " +
+		t.Error("AdaptLegacyWithoutApp reports a resolved app.toml surface. It has none, and a read " +
 			"moved onto an App field would then take a zero value for an operator's setting " +
 			"wherever this producer is used")
 	}
 	if got.Flat != seicfg.FlatView(flat) {
-		t.Error("WithoutAppConfig dropped the flat view, which is the only channel its caller has")
+		t.Error("AdaptLegacyWithoutApp dropped the flat view, which is the only channel its caller has")
 	}
 	if got.Config.Tendermint != nil {
-		t.Error("WithoutAppConfig invented a Tendermint config; the rollback command passes none")
+		t.Error("AdaptLegacyWithoutApp invented a Tendermint config; the rollback command passes none")
 	}
 }
 
-// TestFromLegacyReportsAResolvedApp is the other half, so AppResolved is not simply always false.
-func TestFromLegacyReportsAResolvedApp(t *testing.T) {
-	got := seicfg.FromLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), newFlatView())
+// TestAdaptLegacyReportsAResolvedApp is the other half, so AppResolved is not simply always false.
+func TestAdaptLegacyReportsAResolvedApp(t *testing.T) {
+	got := seicfg.AdaptLegacy(*serverconfig.DefaultConfig(), config.DefaultConfig(), newFlatView())
 
 	if !got.Config.AppResolved() {
-		t.Error("FromLegacy reports an unresolved app.toml surface even though it was handed one, " +
+		t.Error("AdaptLegacy reports an unresolved app.toml surface even though it was handed one, " +
 			"so the flag says nothing and a reader cannot use it to tell the two producers apart")
 	}
 }

@@ -238,7 +238,7 @@ func newApp(
 	// Locals so the rest of this function is unchanged by the signature move.
 	//
 	// No read below has moved onto cfg.Config yet, and one thing has to change before any can:
-	// the rollback command reaches this function through seicfg.WithoutAppConfig, so
+	// the rollback command reaches this function through seicfg.AdaptLegacyWithoutApp, so
 	// cfg.Config.AppResolved is false there and every App field is its zero value. A read moved
 	// onto one would resolve to false or 0 under rollback rather than to what the operator set.
 	// inter-block-cache is the measured candidate, and seicfg's own test already pins that the
