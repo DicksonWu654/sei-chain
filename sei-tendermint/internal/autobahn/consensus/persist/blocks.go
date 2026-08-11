@@ -173,7 +173,7 @@ func (lw *laneWAL) close() error {
 // MaybePruneAndPersistLane holds the per-lane lock for the entire
 // truncate-then-append sequence, so concurrent calls on the same lane
 // serialize correctly. Different lanes are fully parallel.
-// Lanes may be removed via DeleteLane once tipEpoch omits them.
+// Lanes may be removed via SyncLanes/DeleteLane once tipEpoch omits them.
 type BlockPersister struct {
 	dir   utils.Option[string] // immutable after construction
 	lanes utils.RWMutex[map[types.LaneID]*laneWAL]
@@ -339,9 +339,9 @@ func (bp *BlockPersister) MaybePruneAndPersistLane(
 }
 
 // NOTE: MaybePruneAndPersistLane releases the map RLock before acquiring
-// the per-lane lock. DeleteLane must not overlap an in-flight
-// MaybePruneAndPersistLane on the same lane. Avail calls DeleteLane after
-// runPersist's Parallel batch returns for tip-stale leave maps.
+// the per-lane lock. SyncLanes/DeleteLane must not overlap an in-flight
+// MaybePruneAndPersistLane on the same lane. Avail calls SyncLanes after
+// tip-stale map drop and before runPersist's Parallel batch.
 //
 // No-op if the lane WAL is not open (never created, or already deleted).
 func (bp *BlockPersister) DeleteLane(lane types.LaneID) error {
@@ -366,6 +366,28 @@ func (bp *BlockPersister) DeleteLane(lane types.LaneID) error {
 		return nil
 	}
 	panic("unreachable")
+}
+
+// SyncLanes deletes open WALs whose LaneID is not a key of keep. Idempotent.
+// Must not overlap MaybePruneAndPersistLane on a lane being deleted.
+func SyncLanes[V any](bp *BlockPersister, keep map[types.LaneID]V) error {
+	if _, ok := bp.dir.Get(); !ok {
+		return nil
+	}
+	var stale []types.LaneID
+	for lanes := range bp.lanes.RLock() {
+		for lane := range lanes {
+			if _, ok := keep[lane]; !ok {
+				stale = append(stale, lane)
+			}
+		}
+	}
+	for _, lane := range stale {
+		if err := bp.DeleteLane(lane); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close shuts down all per-lane WALs, releasing the exclusive lock each one holds on its directory.

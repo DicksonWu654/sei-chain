@@ -165,8 +165,8 @@ func (s *State) produceSession(ctx context.Context, availState *avail.State, lan
 			limiter := rate.NewLimiter(limit, burst)
 			lastBlockTime := time.Now()
 			for toProduce := firstBlock; ; toProduce += 1 {
-				if err := availState.WaitForLocalCapacity(ctx, lane, toProduce); err != nil {
-					return s.sessionOpErr(lane, "availState.WaitForLocalCapacity()", err)
+				if err := availState.WaitForCapacity(ctx, lane, toProduce); err != nil {
+					return s.sessionOpErr(lane, "availState.WaitForCapacity()", err)
 				}
 				var payload *types.Payload
 				// Wait until either

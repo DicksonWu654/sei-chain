@@ -86,7 +86,7 @@ func TestAvailClientServer(t *testing.T) {
 				lane := a.LocalLane().OrPanic("local")
 				for range totalBlocks {
 					n := a.NextBlock(lane)
-					if err := a.WaitForLocalCapacity(ctx, lane, n); err != nil {
+					if err := a.WaitForCapacity(ctx, lane, n); err != nil {
 						return fmt.Errorf("waitForLocalCapacity(): %w", err)
 					}
 					if _, err := a.ProduceLocalBlock(lane, n, types.GenPayload(rng)); err != nil {

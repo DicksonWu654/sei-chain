@@ -258,6 +258,112 @@ func testState(t *testing.T, stateDir utils.Option[string]) {
 	}
 }
 
+// ApplyEpoch keeps leave maps until tipEpoch dispose; the same persist tick
+// SyncLanes-deletes the leave WAL.
+func TestApplyEpoch_TipEpochDisposeDeletesLeaveWAL(t *testing.T) {
+	ctx := t.Context()
+	rng := utils.TestRng()
+	registry, keys := epoch.GenRegistry(rng, 3)
+	a, b := keys[0], keys[1]
+	cKey := types.GenSecretKey(rng)
+
+	stateDir := t.TempDir()
+	var state *State
+	require.NoError(t, scope.Run(ctx, func(ctx context.Context, s scope.Scope) error {
+		ds := newTestDataState(&data.Config{Registry: registry})
+		s.SpawnBgNamed("data.Run", func() error {
+			return utils.IgnoreCancel(ds.Run(ctx))
+		})
+		var err error
+		state, err = NewState(a, ds, utils.Some(stateDir))
+		if err != nil {
+			return err
+		}
+		// Seed B's WAL before Run so we are not racing the persist goroutine.
+		laneB := registry.LatestEpoch().Committee().Lane(b.Public()).OrPanic("b")
+		signedB := types.Sign(b, types.NewLaneProposal(
+			types.NewBlock(laneB, 0, types.BlockHeaderHash{}, types.GenPayload(rng)),
+		))
+		if err := state.persisters.blocks.MaybePruneAndPersistLane(
+			laneB, true, utils.None[*types.CommitQC](),
+			[]*types.Signed[*types.LaneProposal]{signedB}, noBlockCB,
+		); err != nil {
+			return err
+		}
+		laneBPath := filepath.Join(stateDir, "blocks", laneB.HexString())
+		if _, err := os.Stat(laneBPath); err != nil {
+			return fmt.Errorf("lane B WAL: %w", err)
+		}
+
+		s.SpawnBgNamed("avail.Run", func() error {
+			return utils.IgnoreCancel(state.Run(ctx))
+		})
+
+		laneA := registry.LatestEpoch().Committee().Lane(a.Public()).OrPanic("a")
+		if _, err := state.ProduceLocalBlock(laneA, 0, types.GenPayload(rng)); err != nil {
+			return err
+		}
+
+		ep, err := registry.ActivateEpoch(
+			map[types.PublicKey]uint64{a.Public(): 1, cKey.Public(): 1},
+			types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
+		)
+		if err != nil {
+			return err
+		}
+		if ep.EpochIndex() != 1 {
+			return fmt.Errorf("epoch index: got %d want 1", ep.EpochIndex())
+		}
+		state.ApplyEpoch(ep)
+
+		laneA2 := ep.Committee().Lane(a.Public()).OrPanic("a")
+		laneC := ep.Committee().Lane(cKey.Public()).OrPanic("c")
+		if laneA2 != laneA {
+			return fmt.Errorf("stay lane changed: %v vs %v", laneA, laneA2)
+		}
+		if got := state.LocalLane().OrPanic("stay"); got != laneA2 {
+			return fmt.Errorf("LocalLane: got %v want %v", got, laneA2)
+		}
+		if got := state.NextBlock(laneC); got != 0 {
+			return fmt.Errorf("joiner NextBlock: got %d", got)
+		}
+		if ep.Committee().HasLane(laneB) {
+			return fmt.Errorf("ep1 still has leave lane B")
+		}
+		for inner := range state.inner.Lock() {
+			if _, ok := inner.blocks[laneB]; !ok {
+				return fmt.Errorf("leave maps dropped before tipEpoch")
+			}
+		}
+		if _, err := os.Stat(laneBPath); err != nil {
+			return fmt.Errorf("leave WAL gone before tipEpoch: %w", err)
+		}
+
+		// First retained CommitQC is ep1 → tipEpoch dispose of B (joined 0).
+		qc := makeCommitQC(ep, []types.SecretKey{a, cKey}, utils.None[*types.CommitQC](), nil, utils.None[*types.AppQC]())
+		if err := state.PushCommitQC(ctx, qc); err != nil {
+			return fmt.Errorf("PushCommitQC: %w", err)
+		}
+		if err := state.waitForCommitQC(ctx, qc.Proposal().Index()); err != nil {
+			return fmt.Errorf("waitForCommitQC: %w", err)
+		}
+
+		for inner := range state.inner.Lock() {
+			if _, ok := inner.blocks[laneB]; ok {
+				return fmt.Errorf("leave maps still present after tipEpoch dispose")
+			}
+			if _, ok := inner.blocks[laneC]; !ok {
+				return fmt.Errorf("joiner maps missing after tipEpoch dispose")
+			}
+		}
+		if _, err := os.Stat(laneBPath); !os.IsNotExist(err) {
+			return fmt.Errorf("leave WAL still on disk: %v", err)
+		}
+		return nil
+	}))
+	require.NoError(t, state.Close())
+}
+
 // TestStateRestartFromPersisted runs the state with persistence through 2
 // iterations (blocks → votes → commitQC → appQC each), stops, and restarts
 // from the same directory. This verifies that what the runtime persist

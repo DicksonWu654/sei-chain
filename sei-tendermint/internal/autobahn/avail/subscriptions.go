@@ -32,12 +32,14 @@ func (r *LaneProposalsRecv) Recv(ctx context.Context) (*types.Signed[*types.Lane
 		b, err := r.state.Block(ctx, r.lane, r.next)
 		if err != nil {
 			if errors.Is(err, types.ErrPruned) {
+				// Number prune advances; leave dispose also returns ErrPruned.
+				for inner := range r.state.inner.Lock() {
+					if _, ok := inner.blocks[r.lane]; !ok {
+						return nil, ErrLanePruned
+					}
+				}
 				r.next += 1
 				continue
-			}
-			if errors.Is(err, ErrBadLane) {
-				// TipEpoch pruned leave map (or DeleteLane race).
-				return nil, ErrLanePruned
 			}
 			return nil, fmt.Errorf("x.avail.Block(): %w", err)
 		}
