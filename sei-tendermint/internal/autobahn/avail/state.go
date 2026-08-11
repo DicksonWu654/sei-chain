@@ -11,7 +11,7 @@
 //   - Dispose: joined < tipEpoch && !tipCommittee.HasLane(lane).
 //
 // Subscribe binds LocalLane at subscribe time and serves leave maps until
-// dispose → ErrLanePruned. Produce sessions use WaitProduce / WaitMustStop
+// dispose → ErrLanePruned. Produce sessions use WaitForLocalLane / WaitMustStop
 // (same LaneID stay does not end the session).
 //
 // Restart re-attaches leave WALs still needed for tip; skips WALs already
@@ -85,8 +85,8 @@ func (s *State) WaitLocalLane(ctx context.Context, pred func(utils.Option[types.
 	return lane, nil
 }
 
-// WaitProduce waits until LocalLane is Some (produce session start).
-func (s *State) WaitProduce(ctx context.Context) (types.LaneID, error) {
+// WaitForLocalLane waits until LocalLane is Some.
+func (s *State) WaitForLocalLane(ctx context.Context) (types.LaneID, error) {
 	laneOpt, err := s.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
 		return opt.IsPresent()
 	})
@@ -317,8 +317,10 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		}
 	}()
 
+	// TODO(#3736): restore the epoch of the next CommitQC from persisted tip /
+	// applied state rather than LatestEpoch (ActivateEpoch may be ahead of ApplyEpoch).
 	ep := data.Registry().LatestEpoch()
-	inner, err := newInner(data.Registry(), loaded)
+	inner, err := newInner(ep, data.Registry(), loaded)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +332,7 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		if anchor, ok := ls.pruneAnchor.Get(); ok {
 			c := ep.Committee()
 			for lane := range inner.blocks {
-				// allowCreate only for lanes still in the latest committee; leave WALs truncate in place.
+				// allowCreate only for lanes still in next-CommitQC committee; leave WALs truncate in place.
 				if err := pers.blocks.MaybePruneAndPersistLane(lane, c.HasLane(lane), utils.Some(anchor.CommitQC), nil, utils.None[func(*types.Signed[*types.LaneProposal])]()); err != nil {
 					return nil, fmt.Errorf("prune stale block WAL entries: %w", err)
 				}
@@ -811,7 +813,7 @@ func (s *State) WaitForLaneQCs(
 	panic("unreachable")
 }
 
-// ProduceLocalBlock appends block n on the WaitProduce session lane.
+// ProduceLocalBlock appends block n on the WaitForLocalLane session lane.
 func (s *State) ProduceLocalBlock(lane types.LaneID, n types.BlockNumber, payload *types.Payload) (*types.Signed[*types.LaneProposal], error) {
 	if s.key.Public() != lane.Validator {
 		return nil, ErrBadLane

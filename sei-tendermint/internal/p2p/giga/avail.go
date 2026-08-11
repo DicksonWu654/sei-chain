@@ -10,7 +10,6 @@ import (
 	apb "github.com/sei-protocol/sei-chain/sei-tendermint/internal/autobahn/pb"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/giga/pb"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/rpc"
-	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -64,10 +63,7 @@ func (x *Service) subscribeLaneProposals(ctx context.Context, first types.BlockN
 			return nil, err
 		}
 		logger.Info("StreamLaneProposals: not a committee lane member; waiting to subscribe")
-		if _, err := a.WaitLocalLane(ctx, func(opt utils.Option[types.LaneID]) bool {
-			_, ok := opt.Get()
-			return ok
-		}); err != nil {
+		if _, err := a.WaitForLocalLane(ctx); err != nil {
 			return nil, err
 		}
 		first = 0

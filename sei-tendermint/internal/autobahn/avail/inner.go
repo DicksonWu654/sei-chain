@@ -14,6 +14,8 @@ import (
 // Lane maps: joiners at ApplyEpoch; leavers until tipEpoch dispose (package doc).
 // Restart re-attaches leave WALs; tip-stale ones are skipped (tipcut).
 type inner struct {
+	// epoch is the epoch of the next CommitQC. ApplyEpoch advances it.
+	// It is not Registry.LatestEpoch: activation may be ahead of the next QC.
 	epoch          utils.AtomicSend[*types.Epoch]
 	latestAppQC    utils.Option[*types.AppQC]
 	latestCommitQC utils.AtomicSend[utils.Option[*types.CommitQC]]
@@ -58,8 +60,11 @@ type loadedAvailState struct {
 	blocks      map[types.LaneID][]persist.LoadedBlock
 }
 
-func newInner(registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
-	ep := registry.LatestEpoch()
+// newInner seeds lane maps from nextCommitQCEpoch's committee (the epoch of the
+// next CommitQC), then re-attaches leave WALs from loaded that are still needed.
+// nextCommitQCEpoch is not Registry.LatestEpoch — activation may be ahead.
+func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
+	ep := nextCommitQCEpoch
 	votes := map[types.LaneID]*queue[types.BlockNumber, blockVotes]{}
 	blocks := map[types.LaneID]*queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]{}
 	for lane := range ep.Committee().Lanes().All() {

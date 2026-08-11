@@ -111,11 +111,11 @@ func (s *State) clearMempool() {
 // This is needed so that we can track the evm nonces of sequenced txs - mempool admits txs
 // sequentially in the nonce order.
 //
-// Sessions: WaitProduce → produce until WaitMustStop; then clearMempool. Stay keeps the session.
+// Sessions: WaitForLocalLane → produce until WaitMustStop; then clearMempool. Stay keeps the session.
 func (s *State) Run(ctx context.Context) error {
 	availState := s.consensus.Avail()
 	for ctx.Err() == nil {
-		lane, err := availState.WaitProduce(ctx)
+		lane, err := availState.WaitForLocalLane(ctx)
 		if err != nil {
 			return err
 		}
@@ -225,7 +225,7 @@ func (s *State) produceSession(ctx context.Context, availState *avail.State, lan
 	})
 }
 
-// sessionOpErr maps leave ErrBadLane → Canceled so Run can WaitProduce again.
+// sessionOpErr maps leave ErrBadLane → Canceled so Run can WaitForLocalLane again.
 func (s *State) sessionOpErr(lane types.LaneID, op string, err error) error {
 	if errors.Is(err, avail.ErrBadLane) {
 		if got, ok := s.consensus.Avail().LocalLane().Get(); !ok || got != lane {
