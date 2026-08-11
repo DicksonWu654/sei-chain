@@ -100,7 +100,7 @@ func (s *State) Run(ctx context.Context) error {
 
 		err = utils.IgnoreCancel(scope.Run(ctx, func(ctx context.Context, sc scope.Scope) error {
 			sc.Spawn(func() error {
-				return s.produceSession(ctx, availState, lane)
+				return s.runMempool(ctx, availState, lane)
 			})
 			sc.Spawn(func() error {
 				// Cancels seal / executed waits that do not observe committee.
@@ -119,7 +119,7 @@ func (s *State) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (s *State) produceSession(ctx context.Context, availState *avail.State, lane types.LaneID) error {
+func (s *State) runMempool(ctx context.Context, availState *avail.State, lane types.LaneID) error {
 	m := s.alignMempool(lane)
 	firstBlock := m.first
 	return scope.Run(ctx, func(ctx context.Context, scope scope.Scope) error {
