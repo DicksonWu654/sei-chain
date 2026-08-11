@@ -23,6 +23,7 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/debug"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/flags"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/keys"
+	"github.com/sei-protocol/sei-chain/seicfg"
 
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/rpc"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/codec"
@@ -38,7 +39,6 @@ import (
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	genutilcli "github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil/client/cli"
 	seidbconfig "github.com/sei-protocol/sei-chain/sei-db/config"
-	tmcfg "github.com/sei-protocol/sei-chain/sei-tendermint/config"
 	tmcli "github.com/sei-protocol/sei-chain/sei-tendermint/libs/cli"
 	"github.com/sei-protocol/sei-chain/sei-wasmd/x/wasm"
 	wasmkeeper "github.com/sei-protocol/sei-chain/sei-wasmd/x/wasm/keeper"
@@ -233,9 +233,19 @@ func addModuleInitFlags(_ *cobra.Command) {}
 func newApp(
 	db dbm.DB,
 	traceStore io.Writer,
-	tmConfig *tmcfg.Config,
-	appOpts servertypes.AppOptions,
+	cfg seicfg.Resolved,
 ) servertypes.Application {
+	// Locals so the rest of this function is unchanged by the signature move.
+	//
+	// No read below has moved onto cfg.Config yet, and one thing has to change before any can:
+	// the rollback command reaches this function through seicfg.WithoutAppConfig, so
+	// cfg.Config.AppResolved is false there and every App field is its zero value. A read moved
+	// onto one would resolve to false or 0 under rollback rather than to what the operator set.
+	// inter-block-cache is the measured candidate, and seicfg's own test already pins that the
+	// struct field and the cast below agree on every shape the layers deliver.
+	tmConfig := cfg.Config.Tendermint
+	var appOpts servertypes.AppOptions = cfg.Flat
+
 	var cache sdk.MultiStorePersistentCache
 
 	if cast.ToBool(appOpts.Get(server.FlagInterBlockCache)) {

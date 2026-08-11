@@ -7,6 +7,7 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-cosmos/server/types"
 	tmcmd "github.com/sei-protocol/sei-chain/sei-tendermint/cmd/tendermint/commands"
 	tmcfg "github.com/sei-protocol/sei-chain/sei-tendermint/config"
+	"github.com/sei-protocol/sei-chain/seicfg"
 	"github.com/spf13/cobra"
 )
 
@@ -52,12 +53,7 @@ restarting Tendermint the node will re-fetch and re-execute the transactions in 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := GetServerContextFromCmd(cmd)
 
-			app := appCreator(
-				nil,
-				nil,
-				nil,
-				ctx.Viper,
-			)
+			app := appCreator(nil, nil, seicfg.WithoutAppConfig(ctx.Viper))
 
 			// Get initial app state
 			lastCommit := app.CommitMultiStore().LastCommitID()

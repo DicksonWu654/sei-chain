@@ -34,6 +34,7 @@ import (
 	tmversion "github.com/sei-protocol/sei-chain/sei-tendermint/proto/tendermint/version"
 	tmtypes "github.com/sei-protocol/sei-chain/sei-tendermint/types"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/version"
+	"github.com/sei-protocol/sei-chain/seicfg"
 	"github.com/stretchr/testify/require"
 	dbm "github.com/tendermint/tm-db"
 )
@@ -425,7 +426,7 @@ func TestRollbackScenario1_BothAtSameHeight(t *testing.T) {
 	cfg := setupTendermintStateDB(t, tempDir, initialHeight)
 
 	// Create app creator
-	appCreator := func(dbm.DB, io.Writer, *tmconfig.Config, servertypes.AppOptions) servertypes.Application {
+	appCreator := func(dbm.DB, io.Writer, seicfg.Resolved) servertypes.Application {
 		return app
 	}
 
@@ -467,7 +468,7 @@ func TestRollbackScenario2_AppAheadOfTendermint(t *testing.T) {
 	cfg := setupTendermintStateDB(t, tempDir, tmHeight)
 
 	// Create app creator
-	appCreator := func(dbm.DB, io.Writer, *tmconfig.Config, servertypes.AppOptions) servertypes.Application {
+	appCreator := func(dbm.DB, io.Writer, seicfg.Resolved) servertypes.Application {
 		return app
 	}
 
@@ -509,7 +510,7 @@ func TestRollbackScenario3_TendermintAheadOfApp(t *testing.T) {
 	cfg := setupTendermintStateDB(t, tempDir, tmHeight)
 
 	// Create app creator
-	appCreator := func(dbm.DB, io.Writer, *tmconfig.Config, servertypes.AppOptions) servertypes.Application {
+	appCreator := func(dbm.DB, io.Writer, seicfg.Resolved) servertypes.Application {
 		return app
 	}
 
@@ -547,7 +548,7 @@ func TestRollbackErrorCases(t *testing.T) {
 		// Setup tendermint state at height 0
 		cfg := setupTendermintStateDB(t, tempDir, 0)
 
-		appCreator := func(dbm.DB, io.Writer, *tmconfig.Config, servertypes.AppOptions) servertypes.Application {
+		appCreator := func(dbm.DB, io.Writer, seicfg.Resolved) servertypes.Application {
 			return app
 		}
 
@@ -579,7 +580,7 @@ func TestRollbackWithNumBlocks(t *testing.T) {
 	cfg := setupTendermintStateDB(t, tempDir, initialHeight)
 
 	// Create app creator
-	appCreator := func(dbm.DB, io.Writer, *tmconfig.Config, servertypes.AppOptions) servertypes.Application {
+	appCreator := func(dbm.DB, io.Writer, seicfg.Resolved) servertypes.Application {
 		return app
 	}
 
