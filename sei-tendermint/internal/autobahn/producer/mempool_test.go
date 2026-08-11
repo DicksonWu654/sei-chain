@@ -468,8 +468,12 @@ func TestMempool_EvmTxByHash(t *testing.T) {
 
 	require.NoError(t, scope.Run(ctx, func(ctx context.Context, s scope.Scope) error {
 		s.SpawnBgNamed("env", func() error { return env.Run(ctx) })
-		for m, ctrl := range env.state.mempool.Lock() {
+		for inner, ctrl := range env.state.mempool.Lock() {
 			if err := ctrl.WaitUntil(ctx, func() bool {
+				m, ok := inner.m.Get()
+				if !ok {
+					return true
+				}
 				for _, tx := range txs {
 					if _, ok := m.evmTxs[tx.EVMHash]; ok {
 						return false
@@ -539,12 +543,9 @@ func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
 		if _, err := env.state.TryInsertTx(ctx, env.genTx(rng, addr, app.EvmNonce(addr)).encode()); !errors.Is(err, ErrNotProducing) {
 			return fmt.Errorf("TryInsertTx after leave: got %v, want ErrNotProducing", err)
 		}
-		for m, ctrl := range env.state.mempool.Lock() {
-			if err := ctrl.WaitUntil(ctx, func() bool { return !m.lane.IsPresent() }); err != nil {
+		for inner, ctrl := range env.state.mempool.Lock() {
+			if err := ctrl.WaitUntil(ctx, func() bool { return !inner.m.IsPresent() }); err != nil {
 				return err
-			}
-			if len(m.blocks) != 0 || len(m.nextBlock.txs) != 0 || len(m.evmTxs) != 0 {
-				return fmt.Errorf("mempool not cleared on leave")
 			}
 		}
 

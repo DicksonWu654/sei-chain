@@ -16,7 +16,7 @@ var errTooLarge = errors.New("transaction too large")
 var errBadNonce = errors.New("bad nonce")
 var errMempoolFull = errors.New("mempool is full")
 
-// ErrNotProducing: LocalLane None or mempool not aligned (leave / pre-align gap).
+// ErrNotProducing: no mempool (no local lane / leave) or mempool not aligned to LocalLane.
 var ErrNotProducing = errors.New("not producing")
 
 type blockSpec struct {
@@ -30,15 +30,35 @@ type blockSpec struct {
 	evmNonces map[common.Address]uint64
 }
 
+// mempoolInner is the Watch target. Watch cannot replace its value, so the
+// optional mempool lives here (None when not producing).
+type mempoolInner struct {
+	m utils.Option[*mempool]
+}
+
+// mempool exists only while producing on a local lane.
 type mempool struct {
 	capacity  uint64
-	lane      utils.Option[types.LaneID]
+	lane      types.LaneID
 	first     types.BlockNumber
 	next      types.BlockNumber
 	blocks    map[types.BlockNumber]*blockSpec
 	nextBlock *blockSpec
 	evmNonces map[common.Address]uint64
 	evmTxs    map[common.Hash]tmtypes.Tx
+}
+
+func newMempool(capacity uint64, lane types.LaneID, n types.BlockNumber) *mempool {
+	return &mempool{
+		capacity:  capacity,
+		lane:      lane,
+		first:     n,
+		next:      n,
+		blocks:    map[types.BlockNumber]*blockSpec{},
+		nextBlock: &blockSpec{evmNonces: map[common.Address]uint64{}},
+		evmNonces: map[common.Address]uint64{},
+		evmTxs:    map[common.Hash]tmtypes.Tx{},
+	}
 }
 
 func (m *mempool) IsFull() bool {
@@ -60,32 +80,40 @@ func (m *mempool) SealBlock() {
 // TODO(gprusak): this rpc is probably unused, but if it is
 // consider whether unsequenced/unexecuted lane txs should be included here.
 func (s *State) UnconfirmedTxs() [][]byte {
-	for m := range s.mempool.Lock() {
-		return m.nextBlock.txs
+	for inner := range s.mempool.Lock() {
+		if m, ok := inner.m.Get(); ok {
+			return m.nextBlock.txs
+		}
+		return nil
 	}
-	panic("uneachable")
+	panic("unreachable")
 }
 
 func (s *State) EvmNextPendingNonce(addr common.Address) uint64 {
-	for m := range s.mempool.Lock() {
-		if nonce, ok := m.evmNonces[addr]; ok {
-			return nonce
+	for inner := range s.mempool.Lock() {
+		if m, ok := inner.m.Get(); ok {
+			if nonce, ok := m.evmNonces[addr]; ok {
+				return nonce
+			}
 		}
 	}
 	return s.app.EvmNonce(addr)
 }
 
 func (s *State) EvmTxByHash(hash common.Hash) (tmtypes.Tx, bool) {
-	for m := range s.mempool.Lock() {
-		tx, ok := m.evmTxs[hash]
-		return tx, ok
+	for inner := range s.mempool.Lock() {
+		if m, ok := inner.m.Get(); ok {
+			tx, ok := m.evmTxs[hash]
+			return tx, ok
+		}
+		return nil, false
 	}
 	panic("unreachable")
 }
 
 // Removes txs from mempool assigned to lane blocks <n.
-func (s *State) pruneMempool(n types.BlockNumber) {
-	for m, ctrl := range s.mempool.Lock() {
+func (s *State) pruneMempool(m *mempool, n types.BlockNumber) {
+	for _, ctrl := range s.mempool.Lock() {
 		if n < m.first {
 			return
 		}
@@ -161,14 +189,15 @@ func (s *State) insertTx(ctx context.Context, tx tmtypes.Tx, waitIfFull bool) (*
 		return nil, errTooLarge
 	}
 
-	for m, ctrl := range s.mempool.Lock() {
+	for inner, ctrl := range s.mempool.Lock() {
+		var m *mempool
 		for {
 			local, ok := s.consensus.Avail().LocalLane().Get()
 			if !ok {
 				return nil, ErrNotProducing
 			}
-			cur, hasLane := m.lane.Get()
-			if !hasLane || cur != local {
+			m, ok = inner.m.Get()
+			if !ok || m.lane != local {
 				return nil, ErrNotProducing
 			}
 			if !m.IsFull() {
@@ -183,14 +212,14 @@ func (s *State) insertTx(ctx context.Context, tx tmtypes.Tx, waitIfFull bool) (*
 			// NOTE: in case there are N concurrent InsertTx calls, this condition is reevaluated N times
 			// every time mempool is updated. Depending on proportion of N to the block size it might get too
 			// expensive.
-			// Also wake on leave/realign so leave cannot stall on IsFull forever.
+			// Also wake on leave so leave cannot stall on IsFull forever.
 			if err := ctrl.WaitUntil(ctx, func() bool {
 				loc, ok := s.consensus.Avail().LocalLane().Get()
 				if !ok {
 					return true
 				}
-				cur, ok := m.lane.Get()
-				return !ok || cur != loc || !m.IsFull()
+				m, ok := inner.m.Get()
+				return !ok || m.lane != loc || !m.IsFull()
 			}); err != nil {
 				return nil, err
 			}
