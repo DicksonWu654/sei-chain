@@ -6,16 +6,19 @@ import (
 	"fmt"
 
 	"github.com/sei-protocol/sei-chain/sei-tendermint/autobahn/types"
+	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-// SubscribeLaneProposals binds LocalLane at subscribe time. After leave, serves
-// the leave map until tipEpoch prune → ErrLanePruned; rejoin needs a new Subscribe.
+// SubscribeLaneProposals binds the given lane (must be this node's key). After leave,
+// serves the leave map until tipEpoch prune → ErrLanePruned; rejoin needs a new Subscribe
+// with the new LaneID.
 //
 // Back-leash (AppQC in prior epoch before ActivateEpoch) means tipEpoch prune
-// drops the leave map before rejoin, so Recv ends before LocalLane is Some(new).
-func (s *State) SubscribeLaneProposals(first types.BlockNumber) (*LaneProposalsRecv, error) {
-	lane, ok := s.LocalLane().Get()
-	if !ok {
+// drops the leave map before rejoin, so Recv ends before a new LaneID is Some.
+// Rejoin is at least one epoch after leave, so a live stream on the leave map
+// is not expected to overlap production on the new LaneID.
+func (s *State) SubscribeLaneProposals(lane types.LaneID, first types.BlockNumber) (*LaneProposalsRecv, error) {
+	if lane.Validator != s.key.Public() {
 		return nil, ErrBadLane
 	}
 	return &LaneProposalsRecv{s, lane, first}, nil
@@ -46,6 +49,27 @@ func (r *LaneProposalsRecv) Recv(ctx context.Context) (*types.Signed[*types.Lane
 		r.next += 1
 		return b, nil
 	}
+}
+
+// WaitLane waits until the applied committee has a LaneID for pk.
+// If exclude is Some, also requires the LaneID to differ (e.g. after leave/rejoin).
+func (s *State) WaitLane(ctx context.Context, pk types.PublicKey, exclude utils.Option[types.LaneID]) (types.LaneID, error) {
+	var lane types.LaneID
+	_, err := s.epoch.Wait(ctx, func(ep *types.Epoch) bool {
+		got, ok := ep.Committee().Lane(pk).Get()
+		if !ok {
+			return false
+		}
+		if prev, has := exclude.Get(); has && got == prev {
+			return false
+		}
+		lane = got
+		return true
+	})
+	if err != nil {
+		return types.LaneID{}, err
+	}
+	return lane, nil
 }
 
 func (s *State) SubscribeLaneVotes() *LaneVotesRecv {

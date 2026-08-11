@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sei-protocol/sei-chain/sei-tendermint/autobahn/types"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/autobahn/consensus"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/autobahn/data"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/rpc"
@@ -81,7 +82,7 @@ func (x *Service) RunServer(ctx context.Context, server rpc.Server[API]) error {
 	})
 }
 
-func (x *Service) RunClient(ctx context.Context, client rpc.Client[API], getBlock bool) error {
+func (x *Service) RunClient(ctx context.Context, client rpc.Client[API], peer types.PublicKey, getBlock bool) error {
 	// TODO: implement a uniform robust GetBlock peer-selection / retry strategy
 	// so connections that lack a height (including self) do not need a separate
 	// getBlock=false path to avoid starving the shared fetch queue.
@@ -89,7 +90,7 @@ func (x *Service) RunClient(ctx context.Context, client rpc.Client[API], getBloc
 		s.Spawn(func() error { return x.clientPing(ctx, client) })
 		s.Spawn(func() error { return x.clientConsensus(ctx, client) })
 		s.Spawn(func() error { return x.clientStreamFullCommitQCs(ctx, client) })
-		s.Spawn(func() error { return x.clientStreamLaneProposals(ctx, client) })
+		s.Spawn(func() error { return x.clientStreamLaneProposals(ctx, client, peer) })
 		s.Spawn(func() error { return x.clientStreamLaneVotes(ctx, client) })
 		s.Spawn(func() error { return x.clientStreamCommitQCs(ctx, client) })
 		s.Spawn(func() error { return x.clientStreamAppVotes(ctx, client) })

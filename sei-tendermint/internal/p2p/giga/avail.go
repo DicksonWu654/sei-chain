@@ -9,11 +9,10 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/autobahn/avail"
 	apb "github.com/sei-protocol/sei-chain/sei-tendermint/internal/autobahn/pb"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/giga/pb"
+	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/mux"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/internal/p2p/rpc"
-	"github.com/sei-protocol/seilog"
+	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
-
-var logger = seilog.NewLogger("tendermint", "internal", "p2p", "giga")
 
 func (x *Service) serverStreamLaneProposals(ctx context.Context, server rpc.Server[API]) error {
 	return StreamLaneProposals.Serve(ctx, server, func(ctx context.Context, stream rpc.Stream[*pb.LaneProposal, *pb.StreamLaneProposalsReq]) error {
@@ -25,49 +24,25 @@ func (x *Service) serverStreamLaneProposals(ctx context.Context, server rpc.Serv
 		if err != nil {
 			return fmt.Errorf("StreamLaneProposalsReqConv.Decode(): %w", err)
 		}
-		// ErrLanePruned ends the stream; leave alone keeps serving. Do not bubble —
-		// wait and resubscribe (rejoin tip is 0; back-leash prunes before rejoin).
-		first := req.FirstBlockNumber
+		sub, err := x.validatorState().Avail().SubscribeLaneProposals(req.LaneID, req.FirstBlockNumber)
+		if err != nil {
+			return err
+		}
 		for {
-			sub, err := x.subscribeLaneProposals(ctx, first)
+			p, err := sub.Recv(ctx)
 			if err != nil {
+				// Lane closed / tipcut pruned: end the stream cleanly so the client
+				// can wait for a new LaneID of this producer.
+				if errors.Is(err, avail.ErrLanePruned) {
+					return nil
+				}
 				return err
 			}
-			for {
-				p, err := sub.Recv(ctx)
-				if err != nil {
-					if errors.Is(err, avail.ErrLanePruned) {
-						logger.Info("StreamLaneProposals: leave-lane tipcut pruned; pausing until resubscribe")
-						first = 0
-						break
-					}
-					return err
-				}
-				if err := stream.Send(ctx, LaneProposalConv.Encode(p)); err != nil {
-					return fmt.Errorf("stream.Send(): %w", err)
-				}
+			if err := stream.Send(ctx, LaneProposalConv.Encode(p)); err != nil {
+				return fmt.Errorf("stream.Send(): %w", err)
 			}
 		}
 	})
-}
-
-// subscribeLaneProposals waits for LocalLane then binds Subscribe; ErrBadLane → retry.
-func (x *Service) subscribeLaneProposals(ctx context.Context, first types.BlockNumber) (*avail.LaneProposalsRecv, error) {
-	a := x.validatorState().Avail()
-	for {
-		sub, err := a.SubscribeLaneProposals(first)
-		if err == nil {
-			return sub, nil
-		}
-		if !errors.Is(err, avail.ErrBadLane) {
-			return nil, err
-		}
-		logger.Info("StreamLaneProposals: not a committee lane member; waiting to subscribe")
-		if _, err := a.WaitForLocalLane(ctx); err != nil {
-			return nil, err
-		}
-		first = 0
-	}
 }
 
 func (x *Service) serverStreamLaneVotes(ctx context.Context, server rpc.Server[API]) error {
@@ -156,34 +131,68 @@ func (x *Service) serverStreamCommitQCs(ctx context.Context, server rpc.Server[A
 	})
 }
 
-func (x *Service) clientStreamLaneProposals(ctx context.Context, c rpc.Client[API]) error {
+func (x *Service) clientStreamLaneProposals(ctx context.Context, c rpc.Client[API], peer types.PublicKey) error {
+	a := x.validatorState().Avail()
+	var exclude utils.Option[types.LaneID]
+	first := types.BlockNumber(0)
+	for ctx.Err() == nil {
+		lane, err := a.WaitLane(ctx, peer, exclude)
+		if err != nil {
+			return err
+		}
+		if err := x.streamLaneProposalsOnce(ctx, c, lane, first); err != nil {
+			return err
+		}
+		// Stream ended. Only exclude when the applied committee has dropped or
+		// replaced this LaneID (leave / rejoin). If it is still present, reconnect
+		// to the same identity — a Stay / transport blip must not hang on
+		// WaitLane(exclude). Rejoin is at least one epoch after leave, so tip prune
+		// of the leave map lands before a new LaneID; we do not need to cancel the
+		// old stream early on rejoin.
+		cur, ok := a.Lane(peer).Get()
+		if !ok || cur != lane {
+			exclude = utils.Some(lane)
+			first = 0
+		} else {
+			exclude = utils.None[types.LaneID]()
+			first = a.NextBlock(lane)
+		}
+	}
+	return ctx.Err()
+}
+
+func (x *Service) streamLaneProposalsOnce(ctx context.Context, c rpc.Client[API], lane types.LaneID, first types.BlockNumber) error {
 	stream, err := StreamLaneProposals.Call(ctx, c)
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
-	req := &StreamLaneProposalsReq{}
 	// TODO(gprusak): dissemination of LaneProposals is the main source of bandwidth consumption.
 	// * to keep low latency, we need to push the lane proposals (streaming is required)
-	// * to avoid wasting bandwidth, we should set req.FirstBlockNumber (for that we need to authenticate validator in handshake)
-	// * the current implementation assumes a fully connected network - with a different topology we will need to be smarter.
+	// * to avoid wasting bandwidth, set FirstBlockNumber from local tip once peers are authenticated
+	req := &StreamLaneProposalsReq{LaneID: lane, FirstBlockNumber: first}
 	if err := stream.Send(ctx, StreamLaneProposalsReqConv.Encode(req)); err != nil {
 		return fmt.Errorf("client.StreamLaneProposals(): %w", err)
 	}
 	for {
 		rawProposal, err := stream.Recv(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Server closed after lane prune (handler returns nil → mux CLOSE).
+			if errors.Is(err, mux.ErrRemoteClosed) {
+				return nil
+			}
 			return fmt.Errorf("stream.Recv(): %w", err)
 		}
 		proposal, err := LaneProposalConv.Decode(rawProposal)
 		if err != nil {
 			return fmt.Errorf("LaneProposalConv.Decode(): %w", err)
 		}
-		// Sanity check, checking that the producer only sends their own proposals.
-		// TODO(gprusak): authenticate the peer to be able to do this check.
-		/*if got, want := proposal.Msg().Block().Header().Lane(), c.cfg.GetKey(); got != want {
-			return fmt.Errorf("producer = %q, want %q", got, want)
-		}*/
+		if proposal.Msg().Block().Header().Lane() != lane {
+			return fmt.Errorf("producer lane = %v, want %v", proposal.Msg().Block().Header().Lane(), lane)
+		}
 		if err := x.validatorState().Avail().PushBlock(ctx, proposal); err != nil {
 			return fmt.Errorf("s.PushLaneProposal(): %w", err)
 		}

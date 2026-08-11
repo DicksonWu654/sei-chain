@@ -15,7 +15,10 @@ func TestConv(t *testing.T) {
 			LaneVoteConv.Test(types.GenSigned(rng, types.GenLaneVote(rng))),
 			LaneProposalConv.Test(types.GenSigned(rng, types.GenLaneProposal(rng))),
 			AppVoteConv.Test(types.GenSigned(rng, types.GenAppVote(rng))),
-			StreamLaneProposalsReqConv.Test(&StreamLaneProposalsReq{FirstBlockNumber: types.GenBlockNumber(rng)}),
+			StreamLaneProposalsReqConv.Test(&StreamLaneProposalsReq{
+				LaneID:           types.GenLaneID(rng),
+				FirstBlockNumber: types.GenBlockNumber(rng),
+			}),
 			StreamAppQCsRespConv.Test(&StreamAppQCsResp{
 				AppQC:    types.GenAppQC(rng),
 				CommitQC: types.GenCommitQC(rng),

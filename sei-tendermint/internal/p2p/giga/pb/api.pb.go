@@ -266,6 +266,7 @@ func (x *AppVote) GetAppVoteV2() *pb.SignedAppVote {
 type StreamLaneProposalsReq struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	FirstBlockNumber uint64                 `protobuf:"varint,1,opt,name=first_block_number,json=firstBlockNumber,proto3" json:"first_block_number,omitempty"`
+	LaneId           *pb.LaneID             `protobuf:"bytes,2,opt,name=lane_id,json=laneId,proto3,oneof" json:"lane_id,omitempty"` // required
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -305,6 +306,13 @@ func (x *StreamLaneProposalsReq) GetFirstBlockNumber() uint64 {
 		return x.FirstBlockNumber
 	}
 	return 0
+}
+
+func (x *StreamLaneProposalsReq) GetLaneId() *pb.LaneID {
+	if x != nil {
+		return x.LaneId
+	}
+	return nil
 }
 
 type StreamAppQCsReq struct {
@@ -649,9 +657,12 @@ const file_p2p_giga_api_proto_rawDesc = "" +
 	"\fLaneProposal\x12?\n" +
 	"\x10lane_proposal_v2\x18\x02 \x01(\v2\x15.autobahn.SignedBlockR\x0elaneProposalV2:\x06\xe8\x88\xe2\xab\f\x01J\x04\b\x01\x10\x02R\rlane_proposal\"Z\n" +
 	"\aAppVote\x127\n" +
-	"\vapp_vote_v2\x18\x02 \x01(\v2\x17.autobahn.SignedAppVoteR\tappVoteV2:\x06\xe8\x88\xe2\xab\f\x01J\x04\b\x01\x10\x02R\bapp_vote\"N\n" +
+	"\vapp_vote_v2\x18\x02 \x01(\v2\x17.autobahn.SignedAppVoteR\tappVoteV2:\x06\xe8\x88\xe2\xab\f\x01J\x04\b\x01\x10\x02R\bapp_vote\"\x8a\x01\n" +
 	"\x16StreamLaneProposalsReq\x12,\n" +
-	"\x12first_block_number\x18\x01 \x01(\x04R\x10firstBlockNumber:\x06\xe8\x88\xe2\xab\f\x01\"\x19\n" +
+	"\x12first_block_number\x18\x01 \x01(\x04R\x10firstBlockNumber\x12.\n" +
+	"\alane_id\x18\x02 \x01(\v2\x10.autobahn.LaneIDH\x00R\x06laneId\x88\x01\x01:\x06\xe8\x88\xe2\xab\f\x01B\n" +
+	"\n" +
+	"\b_lane_id\"\x19\n" +
 	"\x0fStreamAppQCsReq:\x06\xe8\x88\xe2\xab\f\x01\"s\n" +
 	"\x10StreamAppQCsResp\x12&\n" +
 	"\x06app_qc\x18\x01 \x01(\v2\x0f.autobahn.AppQCR\x05appQc\x12/\n" +
@@ -700,22 +711,24 @@ var file_p2p_giga_api_proto_goTypes = []any{
 	(*pb.SignedBlockHeader)(nil),   // 15: autobahn.SignedBlockHeader
 	(*pb.SignedBlock)(nil),         // 16: autobahn.SignedBlock
 	(*pb.SignedAppVote)(nil),       // 17: autobahn.SignedAppVote
-	(*pb.AppQC)(nil),               // 18: autobahn.AppQC
-	(*pb.CommitQC)(nil),            // 19: autobahn.CommitQC
-	(*pb.Block)(nil),               // 20: autobahn.Block
+	(*pb.LaneID)(nil),              // 18: autobahn.LaneID
+	(*pb.AppQC)(nil),               // 19: autobahn.AppQC
+	(*pb.CommitQC)(nil),            // 20: autobahn.CommitQC
+	(*pb.Block)(nil),               // 21: autobahn.Block
 }
 var file_p2p_giga_api_proto_depIdxs = []int32{
 	15, // 0: p2p.giga.LaneVote.lane_vote_v2:type_name -> autobahn.SignedBlockHeader
 	16, // 1: p2p.giga.LaneProposal.lane_proposal_v2:type_name -> autobahn.SignedBlock
 	17, // 2: p2p.giga.AppVote.app_vote_v2:type_name -> autobahn.SignedAppVote
-	18, // 3: p2p.giga.StreamAppQCsResp.app_qc:type_name -> autobahn.AppQC
-	19, // 4: p2p.giga.StreamAppQCsResp.commit_qc:type_name -> autobahn.CommitQC
-	20, // 5: p2p.giga.GetBlockResp.block:type_name -> autobahn.Block
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	18, // 3: p2p.giga.StreamLaneProposalsReq.lane_id:type_name -> autobahn.LaneID
+	19, // 4: p2p.giga.StreamAppQCsResp.app_qc:type_name -> autobahn.AppQC
+	20, // 5: p2p.giga.StreamAppQCsResp.commit_qc:type_name -> autobahn.CommitQC
+	21, // 6: p2p.giga.GetBlockResp.block:type_name -> autobahn.Block
+	7,  // [7:7] is the sub-list for method output_type
+	7,  // [7:7] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_p2p_giga_api_proto_init() }
@@ -723,6 +736,7 @@ func file_p2p_giga_api_proto_init() {
 	if File_p2p_giga_api_proto != nil {
 		return
 	}
+	file_p2p_giga_api_proto_msgTypes[6].OneofWrappers = []any{}
 	file_p2p_giga_api_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

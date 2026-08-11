@@ -16,9 +16,9 @@
 //   - Join/stay: ensured at ApplyEpoch (addCommitteeLanes, then Store epoch).
 //   - Leave: maps remain until tipEpoch.IsClosed, then map drop + SyncLanes.
 //
-// Subscribe binds LocalLane at subscribe time and serves leave maps until
-// dispose → ErrLanePruned. Produce sessions use WaitForLocalLane / WaitMustStop
-// (same LaneID stay does not end the session).
+// SubscribeLaneProposals binds an explicit LaneID (must be this node's key) and
+// serves leave maps until dispose → ErrLanePruned. Produce sessions use
+// WaitForLocalLane / WaitMustStop (same LaneID stay does not end the session).
 //
 // Restart re-attaches leave WALs still needed for tip; SyncLanes deletes WALs
 // already tip-stale at the prune anchor (see tipcut skip in newInner).
@@ -76,6 +76,11 @@ type State struct {
 // LocalLane is this node's applied-committee LaneID, if any.
 func (s *State) LocalLane() utils.Option[types.LaneID] {
 	return s.epoch.Load().Committee().Lane(s.key.Public())
+}
+
+// Lane is pk's applied-committee LaneID, if any.
+func (s *State) Lane(pk types.PublicKey) utils.Option[types.LaneID] {
+	return s.epoch.Load().Committee().Lane(pk)
 }
 
 // WaitLocalLane waits until pred(LocalLane()). Stay does not satisfy a "changed" pred.

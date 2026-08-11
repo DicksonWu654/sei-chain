@@ -8,8 +8,10 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-tendermint/libs/utils"
 )
 
-var errRemoteClosed = errors.New("remote closed")
+var ErrRemoteClosed = errors.New("remote closed")
 var errClosed = errors.New("closed")
+
+var errRemoteClosed = ErrRemoteClosed // in-package alias
 
 type Stream struct {
 	state *streamState
