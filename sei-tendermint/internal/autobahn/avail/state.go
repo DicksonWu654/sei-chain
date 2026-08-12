@@ -10,8 +10,9 @@
 //     (epoch of the first retained CommitQC); maps and WAL are kept
 //   - closed: epochOfFirst.IsClosed — maps dropped, SyncLanes deletes the WAL
 //
-// Block/vote ingest uses the latest CommitQC's committee (or inner.epoch before
-// any QC), and still serves closing lanes. A missing map is never waited on.
+// Block/vote ingest uses the latest CommitQC's committee (or the applied
+// committee before any QC), and still serves closing lanes. A missing map is
+// never waited on.
 //
 // SubscribeLaneProposals binds one LaneID and returns ErrLanePruned once that
 // lane is closed. Produce sessions use WaitForLocalLane / WaitMustStop.
@@ -61,9 +62,6 @@ type State struct {
 	data  *data.State
 	inner utils.Watch[*inner]
 
-	// Mirror of inner.epoch (AtomicRecv). Stay (same LaneID) must not end a produce session.
-	epoch utils.AtomicRecv[*types.Epoch]
-
 	// persisters groups all disk persistence components.
 	// Always initialized: real when stateDir is set, no-op otherwise.
 	persisters persisters
@@ -76,7 +74,17 @@ func (s *State) LocalLane() utils.Option[types.LaneID] {
 
 // Lane is pk's applied-committee LaneID, if any.
 func (s *State) Lane(pk types.PublicKey) utils.Option[types.LaneID] {
-	return s.epoch.Load().Committee().Lane(pk)
+	for inner := range s.inner.Lock() {
+		return inner.epoch.Committee().Lane(pk)
+	}
+	panic("unreachable")
+}
+
+func (s *State) appliedCommittee() *types.Committee {
+	for inner := range s.inner.Lock() {
+		return inner.epoch.Committee()
+	}
+	panic("unreachable")
 }
 
 // WaitForLocalLane waits until LocalLane is Some.
@@ -87,21 +95,22 @@ func (s *State) WaitForLocalLane(ctx context.Context) (types.LaneID, error) {
 // WaitMustStop waits until LocalLane is None or != lane (produce session stop).
 func (s *State) WaitMustStop(ctx context.Context, lane types.LaneID) error {
 	pk := s.key.Public()
-	_, err := s.epoch.Wait(ctx, func(ep *types.Epoch) bool {
-		got, ok := ep.Committee().Lane(pk).Get()
-		return !ok || got != lane
-	})
-	return err
+	for inner, ctrl := range s.inner.Lock() {
+		return ctrl.WaitUntil(ctx, func() bool {
+			got, ok := inner.epoch.Committee().Lane(pk).Get()
+			return !ok || got != lane
+		})
+	}
+	panic("unreachable")
 }
 
-// ApplyEpoch installs the applied committee under the inner lock (joiner maps
-// before Store so waiters never observe the new committee without those maps).
+// ApplyEpoch installs the applied committee and ensures joiner maps.
 // Closing lanes keep their maps until epochOfFirst.IsClosed (see package doc).
 // Registry ActivateEpoch is separate; production wiring is #3736.
 func (s *State) ApplyEpoch(ep *types.Epoch) {
 	for inner, ctrl := range s.inner.Lock() {
 		inner.addCommitteeLanes(ep.Committee())
-		inner.epoch.Store(ep)
+		inner.epoch = ep
 		ctrl.Updated()
 	}
 }
@@ -268,8 +277,7 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		}
 	}()
 
-	// TODO(#3736): restore the epoch of the next CommitQC from persisted tip /
-	// applied state rather than LatestEpoch (ActivateEpoch may be ahead of ApplyEpoch).
+	// TODO(#3736): restore applied epoch from persisted tip rather than LatestEpoch.
 	ep := data.Registry().LatestEpoch()
 	inner, err := newInner(ep, data.Registry(), loaded)
 	if err != nil {
@@ -303,7 +311,6 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		key:        key,
 		data:       data,
 		inner:      utils.NewWatch(inner),
-		epoch:      inner.epoch.Subscribe(),
 		persisters: pers,
 	}, nil
 }
@@ -411,7 +418,7 @@ func (s *State) PushCommitQC(ctx context.Context, qc *types.CommitQC) error {
 			return nil
 		}
 		// TODO(#3736): accept prior-epoch CommitQCs while tip lags across ApplyEpoch.
-		if got, want := qc.Proposal().EpochIndex(), inner.epoch.Load().EpochIndex(); got != want {
+		if got, want := qc.Proposal().EpochIndex(), inner.epoch.EpochIndex(); got != want {
 			return fmt.Errorf("commitQC epoch_index %d != current epoch %d", got, want)
 		}
 		inner.commitQCs.pushBack(qc)
@@ -646,7 +653,7 @@ func (s *State) PushVote(ctx context.Context, vote *types.Signed[*types.LaneVote
 		for q.next <= n {
 			q.pushBack(newBlockVotes())
 		}
-		if _, ok := q.q[n].pushVote(inner.epoch.Load(), vote); ok {
+		if _, ok := q.q[n].pushVote(inner.epoch, vote); ok {
 			ctrl.Updated()
 		}
 	}
@@ -721,7 +728,7 @@ func (s *State) fullCommitQC(ctx context.Context, n types.RoadIndex) (*types.Ful
 func (s *State) WaitForCapacity(ctx context.Context, lane types.LaneID, toProduce types.BlockNumber) error {
 	for inner, ctrl := range s.inner.Lock() {
 		if err := ctrl.WaitUntil(ctx, func() bool {
-			if !inner.epoch.Load().Committee().HasLane(lane) {
+			if !inner.epoch.Committee().HasLane(lane) {
 				return true
 			}
 			if _, ok := inner.blocks[lane]; !ok {
@@ -731,7 +738,7 @@ func (s *State) WaitForCapacity(ctx context.Context, lane types.LaneID, toProduc
 		}); err != nil {
 			return err
 		}
-		if !inner.epoch.Load().Committee().HasLane(lane) {
+		if !inner.epoch.Committee().HasLane(lane) {
 			return ErrBadLane
 		}
 		if _, ok := inner.blocks[lane]; !ok {
@@ -777,7 +784,7 @@ func (s *State) ProduceLocalBlock(lane types.LaneID, n types.BlockNumber, payloa
 	}
 	var result *types.Signed[*types.LaneProposal]
 	for inner, ctrl := range s.inner.Lock() {
-		if !inner.epoch.Load().Committee().HasLane(lane) {
+		if !inner.epoch.Committee().HasLane(lane) {
 			return nil, ErrBadLane
 		}
 		q, ok := inner.blocks[lane]
@@ -899,7 +906,7 @@ func (s *State) runPersist(ctx context.Context, pers persisters) error {
 			s.markBlockPersisted(header.Lane(), header.BlockNumber()+1)
 		}
 
-		committee := s.epoch.Load().Committee()
+		committee := s.appliedCommittee()
 
 		if err := persist.SyncLanes(pers.blocks, batch.blocks); err != nil {
 			return err

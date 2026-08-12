@@ -13,9 +13,7 @@ import (
 
 // inner holds CommitQC/AppQC queues and per-LaneID block/vote maps.
 type inner struct {
-	// epoch is the *Epoch for the next CommitQC (ApplyEpoch stores it).
-	// Distinct from Registry.LatestEpoch, which may already be further ahead.
-	epoch          utils.AtomicSend[*types.Epoch]
+	epoch          *types.Epoch
 	latestAppQC    utils.Option[*types.AppQC]
 	latestCommitQC utils.AtomicSend[utils.Option[*types.CommitQC]]
 	appVotes       *queue[types.GlobalBlockNumber, appVotes]
@@ -59,19 +57,19 @@ type loadedAvailState struct {
 	blocks      map[types.LaneID][]persist.LoadedBlock
 }
 
-// newInner builds in-memory state for nextCommitQCEpoch (epoch of the next CommitQC)
-// and loads persisted lane block WALs that are still open as of the prune anchor.
-// Closed-lane WALs are skipped here; SyncLanes deletes those dirs later.
-func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
+// newInner builds in-memory state for ep and loads persisted lane block WALs
+// that are still open as of the prune anchor. Closed-lane WALs are skipped
+// here; SyncLanes deletes those dirs later.
+func newInner(ep *types.Epoch, registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
 	votes := map[types.LaneID]*queue[types.BlockNumber, blockVotes]{}
 	blocks := map[types.LaneID]*queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]{}
-	for lane := range nextCommitQCEpoch.Committee().Lanes().All() {
+	for lane := range ep.Committee().Lanes().All() {
 		votes[lane] = newQueue[types.BlockNumber, blockVotes]()
 		blocks[lane] = newQueue[types.BlockNumber, *types.Signed[*types.LaneProposal]]()
 	}
 
 	i := &inner{
-		epoch:               utils.NewAtomicSend(nextCommitQCEpoch),
+		epoch:               ep,
 		latestAppQC:         utils.None[*types.AppQC](),
 		latestCommitQC:      utils.NewAtomicSend(utils.None[*types.CommitQC]()),
 		appVotes:            newQueue[types.GlobalBlockNumber, appVotes](),
@@ -81,7 +79,7 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 		nextBlockToPersist:  make(map[types.LaneID]types.BlockNumber, len(votes)),
 		persistedBlockStart: make(map[types.LaneID]types.BlockNumber, len(votes)),
 	}
-	i.appVotes.prune(nextCommitQCEpoch.FirstBlock())
+	i.appVotes.prune(ep.FirstBlock())
 
 	l, ok := loaded.Get()
 	if !ok {
@@ -90,8 +88,8 @@ func newInner(nextCommitQCEpoch *types.Epoch, registry *epoch.Registry, loaded u
 
 	// Ensure maps for every persisted lane WAL that is not closed as of the
 	// prune-anchor epoch, then apply the anchor so queues sit at the right
-	// tips before pushBack. Extra maps (not in nextCommitQCEpoch) are fine:
-	// dropLanes + SyncLanes remove them once epochOfFirst.IsClosed.
+	// tips before pushBack. Extra maps (not in ep) are fine: dropLanes +
+	// SyncLanes remove them once epochOfFirst.IsClosed.
 	anchorEp := utils.None[*types.Epoch]()
 	if anchor, ok := l.pruneAnchor.Get(); ok {
 		ep, ok := registry.EpochByIndex(anchor.CommitQC.Proposal().EpochIndex())
@@ -207,7 +205,7 @@ func (i *inner) dropLanes(lanes []types.LaneID) int {
 
 // TODO: filter votes per-epoch committee once epoch transitions are wired up.
 func (i *inner) laneQC(lane types.LaneID, n types.BlockNumber) (*types.LaneQC, bool) {
-	c := i.epoch.Load().Committee()
+	c := i.epoch.Committee()
 	votes, ok := i.votes[lane]
 	if !ok {
 		return nil, false

@@ -53,21 +53,23 @@ func (r *LaneProposalsRecv) Recv(ctx context.Context) (*types.Signed[*types.Lane
 // If exclude is Some, also requires the LaneID to differ (e.g. after leave/rejoin).
 func (s *State) WaitLane(ctx context.Context, pk types.PublicKey, exclude utils.Option[types.LaneID]) (types.LaneID, error) {
 	var lane types.LaneID
-	_, err := s.epoch.Wait(ctx, func(ep *types.Epoch) bool {
-		got, ok := ep.Committee().Lane(pk).Get()
-		if !ok {
-			return false
+	for inner, ctrl := range s.inner.Lock() {
+		if err := ctrl.WaitUntil(ctx, func() bool {
+			got, ok := inner.epoch.Committee().Lane(pk).Get()
+			if !ok {
+				return false
+			}
+			if prev, has := exclude.Get(); has && got == prev {
+				return false
+			}
+			lane = got
+			return true
+		}); err != nil {
+			return types.LaneID{}, err
 		}
-		if prev, has := exclude.Get(); has && got == prev {
-			return false
-		}
-		lane = got
-		return true
-	})
-	if err != nil {
-		return types.LaneID{}, err
+		return lane, nil
 	}
-	return lane, nil
+	panic("unreachable")
 }
 
 func (s *State) SubscribeLaneVotes() *LaneVotesRecv {
