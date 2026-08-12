@@ -845,71 +845,61 @@ func TestNewInnerPruneAnchorCommitQCUsedForPrune(t *testing.T) {
 	require.Equal(t, types.RoadIndex(3), i.commitQCs.next)
 }
 
-// On restart, block WALs are loaded for lanes still open as of the prune anchor
-// even when they are absent from the next CommitQC epoch.
-func TestNewInnerRestoresLeaveLaneWAL(t *testing.T) {
+// Persisted WALs: keep if open at the prune anchor; skip if closed.
+// ep committee lanes are admitted even with no WAL.
+func TestNewInnerKeepsOpenLanes(t *testing.T) {
 	rng := utils.TestRng()
 	registry, keys := epoch.GenRegistry(rng, 3)
-	a, b := keys[0], keys[1]
+	a, b, d := keys[0], keys[1], keys[2]
 	cKey := types.GenSecretKey(rng)
 	ep0 := registry.LatestEpoch()
+	laneA := ep0.Committee().Lane(a.Public()).OrPanic("a")
 	laneB := ep0.Committee().Lane(b.Public()).OrPanic("b")
+	laneD := ep0.Committee().Lane(d.Public()).OrPanic("d")
 
-	b0 := testSignedBlock(b, laneB, 0, types.BlockHeaderHash{}, rng)
-	loaded := &loadedAvailState{
-		blocks: map[types.LaneID][]persist.LoadedBlock{
-			laneB: {{Number: 0, Proposal: b0}},
-		},
-	}
-
+	// ep1: D leaves. Anchor CommitQC is in ep1 — D is closed, A/B still open.
 	ep1, err := registry.ActivateEpoch(
+		map[types.PublicKey]uint64{a.Public(): 1, b.Public(): 1},
+		types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
+	)
+	require.NoError(t, err)
+	require.True(t, ep1.IsClosed(laneD))
+	require.False(t, ep1.IsClosed(laneA))
+	require.False(t, ep1.IsClosed(laneB))
+
+	ep1Keys := []types.SecretKey{a, b}
+	qc1 := makeCommitQC(ep1, ep1Keys, utils.None[*types.CommitQC](), nil, utils.None[*types.AppQC]())
+	appProposal := types.NewAppProposal(qc1.GlobalRange().First, qc1.Index(), types.GenAppHash(rng), 0)
+	appQC := types.NewAppQC(makeAppVotes(ep1Keys, appProposal))
+
+	// ep2: B leaves, C joins. Next CommitQC epoch names A (and C), not B.
+	ep2, err := registry.ActivateEpoch(
 		map[types.PublicKey]uint64{a.Public(): 1, cKey.Public(): 1},
 		types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
 	)
 	require.NoError(t, err)
-	require.False(t, ep1.Committee().HasLane(laneB))
+	require.True(t, ep2.Committee().HasLane(laneA))
+	require.False(t, ep2.Committee().HasLane(laneB))
+	laneC := ep2.Committee().Lane(cKey.Public()).OrPanic("c")
 
-	i, err := newInner(ep1, registry, utils.Some(loaded))
-	require.NoError(t, err)
-	require.Contains(t, i.blocks, laneB)
-	require.Equal(t, types.BlockNumber(1), i.blocks[laneB].next)
-	require.Contains(t, i.votes, laneB)
-}
-
-// Prune-anchor epoch still has the closing lane: load WAL and position via prune.
-func TestNewInnerRestoresLeaveLaneNamedByAnchor(t *testing.T) {
-	rng := utils.TestRng()
-	registry, keys := epoch.GenRegistry(rng, 3)
-	a, b := keys[0], keys[1]
-	cKey := types.GenSecretKey(rng)
-	ep0 := registry.LatestEpoch()
-	laneB := ep0.Committee().Lane(b.Public()).OrPanic("b")
-
-	qc0 := makeCommitQC(ep0, keys, utils.None[*types.CommitQC](), nil, utils.None[*types.AppQC]())
-	require.True(t, ep0.Committee().HasLane(laneB))
-	appProposal := types.NewAppProposal(qc0.GlobalRange().First, qc0.Index(), types.GenAppHash(rng), 0)
-	appQC := types.NewAppQC(makeAppVotes(keys, appProposal))
-
-	lrFirst := qc0.LaneRange(laneB).First()
-	b0 := testSignedBlock(b, laneB, lrFirst, types.BlockHeaderHash{}, rng)
+	nA := qc1.LaneRange(laneA).First()
+	nB := qc1.LaneRange(laneB).First()
 	loaded := &loadedAvailState{
-		pruneAnchor: utils.Some(&PruneAnchor{AppQC: appQC, CommitQC: qc0}),
-		commitQCs:   []persist.LoadedCommitQC{{Index: qc0.Index(), QC: qc0}},
+		pruneAnchor: utils.Some(&PruneAnchor{AppQC: appQC, CommitQC: qc1}),
+		commitQCs:   []persist.LoadedCommitQC{{Index: qc1.Index(), QC: qc1}},
 		blocks: map[types.LaneID][]persist.LoadedBlock{
-			laneB: {{Number: lrFirst, Proposal: b0}},
+			laneA: {{Number: nA, Proposal: testSignedBlock(a, laneA, nA, types.BlockHeaderHash{}, rng)}},
+			laneB: {{Number: nB, Proposal: testSignedBlock(b, laneB, nB, types.BlockHeaderHash{}, rng)}},
+			laneD: {{Number: 0, Proposal: testSignedBlock(d, laneD, 0, types.BlockHeaderHash{}, rng)}},
 		},
 	}
 
-	_, err := registry.ActivateEpoch(
-		map[types.PublicKey]uint64{a.Public(): 1, cKey.Public(): 1},
-		types.OpenRoadRange(), time.Time{}, registry.FirstBlock(),
-	)
+	i, err := newInner(ep2, registry, utils.Some(loaded))
 	require.NoError(t, err)
-
-	// Next CommitQC is still in ep0; B is closing and must be loaded for that window.
-	i, err := newInner(ep0, registry, utils.Some(loaded))
-	require.NoError(t, err)
-	require.Contains(t, i.blocks, laneB)
-	require.Equal(t, lrFirst, i.blocks[laneB].first)
-	require.Equal(t, lrFirst+1, i.blocks[laneB].next)
+	require.Contains(t, i.blocks, laneA) // in ep (+ WAL)
+	require.Contains(t, i.blocks, laneB) // closing: open at anchor, not in ep
+	require.Contains(t, i.blocks, laneC) // in ep, no WAL
+	require.Equal(t, types.BlockNumber(0), i.blocks[laneC].first)
+	require.Equal(t, types.BlockNumber(0), i.blocks[laneC].next)
+	require.NotContains(t, i.blocks, laneD) // closed at anchor
 }

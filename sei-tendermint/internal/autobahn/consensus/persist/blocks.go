@@ -341,7 +341,7 @@ func (bp *BlockPersister) MaybePruneAndPersistLane(
 // NOTE: MaybePruneAndPersistLane releases the map RLock before acquiring
 // the per-lane lock. SyncLanes/DeleteLane must not overlap an in-flight
 // MaybePruneAndPersistLane on the same lane. Avail calls SyncLanes after
-// tip-stale map drop and before runPersist's Parallel batch.
+// epochOfFirst.IsClosed map drop and before runPersist's Parallel batch.
 //
 // No-op if the lane WAL is not open (never created, or already deleted).
 func (bp *BlockPersister) DeleteLane(lane types.LaneID) error {

@@ -57,9 +57,7 @@ type loadedAvailState struct {
 	blocks      map[types.LaneID][]persist.LoadedBlock
 }
 
-// newInner builds in-memory state for ep and loads persisted lane block WALs
-// that are still open as of the prune anchor. Closed-lane WALs are skipped
-// here; SyncLanes deletes those dirs later.
+// newInner admits ep's lanes and loads WALs not closed at the prune anchor.
 func newInner(ep *types.Epoch, registry *epoch.Registry, loaded utils.Option[*loadedAvailState]) (*inner, error) {
 	votes := map[types.LaneID]*queue[types.BlockNumber, blockVotes]{}
 	blocks := map[types.LaneID]*queue[types.BlockNumber, *types.Signed[*types.LaneProposal]]{}
@@ -86,10 +84,6 @@ func newInner(ep *types.Epoch, registry *epoch.Registry, loaded utils.Option[*lo
 		return i, nil
 	}
 
-	// Ensure maps for every persisted lane WAL that is not closed as of the
-	// prune-anchor epoch, then apply the anchor so queues sit at the right
-	// tips before pushBack. Extra maps (not in ep) are fine: dropLanes +
-	// SyncLanes remove them once epochOfFirst.IsClosed.
 	anchorEp := utils.None[*types.Epoch]()
 	if anchor, ok := l.pruneAnchor.Get(); ok {
 		ep, ok := registry.EpochByIndex(anchor.CommitQC.Proposal().EpochIndex())
@@ -187,7 +181,6 @@ func (i *inner) addCommitteeLanes(c *types.Committee) {
 	}
 }
 
-// dropLanes removes block/vote maps for the given LaneIDs.
 func (i *inner) dropLanes(lanes []types.LaneID) int {
 	n := 0
 	for _, lane := range lanes {

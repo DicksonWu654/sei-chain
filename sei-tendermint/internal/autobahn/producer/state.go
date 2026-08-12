@@ -89,7 +89,7 @@ func (s *State) clearMempool() {
 // This is needed so that we can track the evm nonces of sequenced txs - mempool admits txs
 // sequentially in the nonce order.
 //
-// Sessions: WaitForLocalLane → produce until WaitMustStop; then clearMempool. Stay keeps the session.
+// Sessions: WaitForLocalLane → produce until WaitUntilClosed; then clearMempool. Stay keeps the session.
 func (s *State) Run(ctx context.Context) error {
 	availState := s.consensus.Avail()
 	for ctx.Err() == nil {
@@ -104,7 +104,7 @@ func (s *State) Run(ctx context.Context) error {
 			})
 			sc.Spawn(func() error {
 				// Cancels seal / executed waits that do not observe committee.
-				if err := availState.WaitMustStop(ctx, lane); err != nil {
+				if err := availState.WaitUntilClosed(ctx, lane); err != nil {
 					return err
 				}
 				return context.Canceled

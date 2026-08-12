@@ -6,8 +6,8 @@
 //
 // Each LaneID may have in-memory block/vote maps and an on-disk block WAL:
 //   - active: in the next-CommitQC committee (maps ensured at ApplyEpoch)
-//   - closing: left that committee, but not yet closed at epochOfFirst
-//     (epoch of the first retained CommitQC); maps and WAL are kept
+//   - closing: left that committee, but not yet closed at epochOfFirst;
+//     maps and WAL are kept
 //   - closed: epochOfFirst.IsClosed — maps dropped, SyncLanes deletes the WAL
 //
 // Block/vote ingest uses the latest CommitQC's committee (or the applied
@@ -15,7 +15,7 @@
 // never waited on.
 //
 // SubscribeLaneProposals binds one LaneID and returns ErrLanePruned once that
-// lane is closed. Produce sessions use WaitForLocalLane / WaitMustStop.
+// lane is closed. Produce sessions use WaitForLocalLane / WaitUntilClosed.
 //
 // Restart loads block WALs for lanes that are not closed as of the prune-anchor
 // epoch; SyncLanes deletes any leftover closed-lane WAL dirs.
@@ -92,21 +92,16 @@ func (s *State) WaitForLocalLane(ctx context.Context) (types.LaneID, error) {
 	return s.WaitLane(ctx, s.key.Public(), utils.None[types.LaneID]())
 }
 
-// WaitMustStop waits until LocalLane is None or != lane (produce session stop).
-func (s *State) WaitMustStop(ctx context.Context, lane types.LaneID) error {
-	pk := s.key.Public()
+// WaitUntilClosed waits until the applied epoch reports lane closed (produce session stop).
+func (s *State) WaitUntilClosed(ctx context.Context, lane types.LaneID) error {
 	for inner, ctrl := range s.inner.Lock() {
 		return ctrl.WaitUntil(ctx, func() bool {
-			got, ok := inner.epoch.Committee().Lane(pk).Get()
-			return !ok || got != lane
+			return inner.epoch.IsClosed(lane)
 		})
 	}
 	panic("unreachable")
 }
 
-// ApplyEpoch installs the applied committee and ensures joiner maps.
-// Closing lanes keep their maps until epochOfFirst.IsClosed (see package doc).
-// Registry ActivateEpoch is separate; production wiring is #3736.
 func (s *State) ApplyEpoch(ep *types.Epoch) {
 	for inner, ctrl := range s.inner.Lock() {
 		inner.addCommitteeLanes(ep.Committee())
@@ -115,7 +110,7 @@ func (s *State) ApplyEpoch(ep *types.Epoch) {
 	}
 }
 
-// epochOfFirst returns the registry epoch of the first retained CommitQC.
+// epochOfFirst returns the epoch of the first (oldest) retained CommitQC.
 func epochOfFirst(inner *inner, registry *epoch.Registry) (utils.Option[*types.Epoch], error) {
 	if inner.commitQCs.first >= inner.commitQCs.next {
 		return utils.None[*types.Epoch](), nil
@@ -277,7 +272,6 @@ func NewState(key types.SecretKey, data *data.State, stateDir utils.Option[strin
 		}
 	}()
 
-	// TODO(#3736): restore applied epoch from persisted tip rather than LatestEpoch.
 	ep := data.Registry().LatestEpoch()
 	inner, err := newInner(ep, data.Registry(), loaded)
 	if err != nil {
@@ -417,7 +411,6 @@ func (s *State) PushCommitQC(ctx context.Context, qc *types.CommitQC) error {
 		if idx != inner.commitQCs.next {
 			return nil
 		}
-		// TODO(#3736): accept prior-epoch CommitQCs while tip lags across ApplyEpoch.
 		if got, want := qc.Proposal().EpochIndex(), inner.epoch.EpochIndex(); got != want {
 			return fmt.Errorf("commitQC epoch_index %d != current epoch %d", got, want)
 		}
@@ -937,7 +930,7 @@ func (s *State) runPersist(ctx context.Context, pers persisters) error {
 }
 
 // persistBatch holds the data collected under lock for one persist iteration.
-// blocks keys are the in-memory lanes after tip-stale drop (empty slice = no appends).
+// blocks keys are the in-memory lanes after epochOfFirst.IsClosed drop (empty slice = no appends).
 type persistBatch struct {
 	blocks      map[types.LaneID][]*types.Signed[*types.LaneProposal]
 	commitQCs   []*types.CommitQC
@@ -1011,12 +1004,12 @@ func (s *State) collectPersistBatch(
 		}); err != nil {
 			return b, err
 		}
-		firstEp, err := epochOfFirst(inner, s.data.Registry())
+		epOfFirst, err := epochOfFirst(inner, s.data.Registry())
 		if err != nil {
 			return b, err
 		}
 		var closed []types.LaneID
-		if ep, ok := firstEp.Get(); ok {
+		if ep, ok := epOfFirst.Get(); ok {
 			for lane := range inner.blocks {
 				if ep.IsClosed(lane) {
 					closed = append(closed, lane)

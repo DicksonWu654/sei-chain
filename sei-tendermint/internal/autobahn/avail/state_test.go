@@ -260,7 +260,7 @@ func testState(t *testing.T, stateDir utils.Option[string]) {
 
 // ApplyEpoch keeps closing-lane maps until epochOfFirst.IsClosed; the same
 // persist tick SyncLanes-deletes that lane's WAL.
-func TestApplyEpoch_TipEpochDisposeDeletesLeaveWAL(t *testing.T) {
+func TestApplyEpoch_EpochOfFirstClosedDeletesWAL(t *testing.T) {
 	ctx := t.Context()
 	rng := utils.TestRng()
 	registry, keys := epoch.GenRegistry(rng, 3)

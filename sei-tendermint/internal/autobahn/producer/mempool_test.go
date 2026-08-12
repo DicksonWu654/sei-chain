@@ -534,7 +534,7 @@ func TestProducer_LeaveCancelsAndRejoinStartsNewLane(t *testing.T) {
 			return err
 		}
 		availState.ApplyEpoch(epLeave)
-		if err := availState.WaitMustStop(ctx, lane0); err != nil {
+		if err := availState.WaitUntilClosed(ctx, lane0); err != nil {
 			return err
 		}
 
